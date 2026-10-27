@@ -1,0 +1,8 @@
+# layout: <root>/<split>/images/*.tif  and  <root>/<split>/masks/*.tif (same file names)
+root: ./data/loveda_split
+clearml_dataset_id: null  # if set, root is replaced by Dataset.get(...).get_local_copy()
+in_channels: 3
+divide_by: 255.0
+mean: null                # optional per-channel lists
+std: null
+splits: {train: train, val: val}
