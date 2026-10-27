@@ -112,6 +112,9 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     # exactly those, so an agent image / offline mirror has to provide the same versions.
     for pkg in FORCED_REQUIREMENTS:
         Task.add_requirements(pkg)
+    # torch.onnx.export imports `onnx`, whose generated code needs protobuf >= 6; Kaggle's system protobuf is 5.x and
+    # ClearML records no version for packages the code does not import itself, so the clash only showed on the agent.
+    Task.add_requirements("protobuf", ">=6.31.1")
 
     # 1) Task.init -- reuse_last_task_id=False => every call makes a fresh Task (no overwritten history)
     task = Task.init(
