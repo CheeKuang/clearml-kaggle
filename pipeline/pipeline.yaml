@@ -16,7 +16,7 @@ steps:
 params:
   architecture: unet
   encoder: resnet34_imagenet
-  data.clearml_dataset_id: null     # set to the id printed by the dataset upload
+  data.clearml_dataset_id: 2be0c2997c1348be9b5315fa0cf15b92   # loveda-buildings
 
 train_params:                       # train step only
   preflight.enabled: false          # domain_check already gated this run
