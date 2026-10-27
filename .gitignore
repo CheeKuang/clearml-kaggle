@@ -8,3 +8,5 @@ __pycache__/
 .DS_Store
 clearml.conf
 .env
+weights/
+offline/wheelhouse/

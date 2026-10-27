@@ -1,0 +1,9 @@
+# @package _global_
+# Offline-safe twin of resnet34_imagenet: no download at model build time.
+# Create the file once, while online:  python -m src.export_weights   (writes weights/resnet34_imagenet.pth)
+model:
+  encoder_name: resnet34
+  encoder_weights: null
+pretrain:
+  source: local
+  path: ./weights/resnet34_imagenet.pth
