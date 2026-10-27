@@ -55,7 +55,7 @@ def cgroup_limits() -> tuple[float | None, float | None]:
 def peak_rss_gib() -> float:
     """Peak resident memory of this process (includes the torch import itself)."""
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss     # bytes on macOS, KiB on Linux
-    return r / (1 if sys.platform == "darwin" else 1024) / GIB
+    return r * (1 if sys.platform == "darwin" else 1024) / GIB
 
 
 @torch.inference_mode()
