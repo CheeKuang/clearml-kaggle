@@ -55,7 +55,7 @@ class Reporter:
 def _fmt(v: Any) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
-    if v is None or v == "None":      # ClearML stringifies None
+    if v is None or v in ("None", ""):      # ClearML stringifies None (as "None" or "")
         return "null"
     return str(v)
 
