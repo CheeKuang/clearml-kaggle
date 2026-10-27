@@ -7,6 +7,7 @@ agent enforces the production limits (k8s pod requests/limits or docker --cpus/-
 numbers describe the host, not the envelope."""
 from __future__ import annotations
 
+import faulthandler
 import json
 import os
 import resource
@@ -59,29 +60,36 @@ def peak_rss_gib() -> float:
 @torch.inference_mode()
 def bench(model, x, threads: int, warmup: int, iters: int) -> np.ndarray:
     torch.set_num_threads(threads)
+    print(f"[resource] {threads} threads: warmup {warmup}, timed {iters}", flush=True)
     for _ in range(warmup):
         model(x)
     times = []
-    for _ in range(iters):
+    for i in range(iters):
         t0 = time.perf_counter()
         model(x)
         times.append(time.perf_counter() - t0)
+        print(f"[resource] {threads} threads iter {i + 1}/{iters}: {times[-1]:.2f}s", flush=True)
     return np.asarray(times)
 
 
 @hydra.main(config_path="../conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig):
     cfg.clearml.task_name = "resource-check"                    # stable name -> pipeline finds the base task
+    faulthandler.dump_traceback_later(120, repeat=True)         # a stall prints its stack into the Task console
     out_dir = Path(HydraConfig.get().runtime.output_dir)
     task, cfg = init_clearml(cfg)
     reporter = Reporter(task)
     r = cfg.resource
 
+    print(f"[resource] building {cfg.model.arch}/{cfg.model.encoder_name}; host CPUs "
+          f"{len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else os.cpu_count()}, "
+          f"torch {torch.__version__}, torch threads {torch.get_num_threads()}", flush=True)
     build_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
     build_cfg.model.encoder_weights = None                      # weights don't change cost; no downloads
     build_cfg.pretrain = None
     model = build_model(build_cfg).eval()
 
+    print("[resource] model built", flush=True)
     x = torch.randn(r.batch_size, cfg.data.in_channels, r.tile_size, r.tile_size)
     scores = {"params_m": sum(p.numel() for p in model.parameters()) / 1e6}
     for name, threads in (("request", r.cpu_request), ("limit", r.cpu_limit)):
