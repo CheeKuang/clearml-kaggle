@@ -1,9 +1,10 @@
 """Start a clearml-agent inside a Kaggle notebook so the `kaggle` queue runs on Kaggle's GPU.
 
 Notebook settings: Accelerator = GPU, Internet = On.
-Add-ons > Secrets (all required unless noted):
-  CLEARML_API_HOST, CLEARML_WEB_HOST, CLEARML_FILES_HOST, CLEARML_API_ACCESS_KEY, CLEARML_API_SECRET_KEY
-  GIT_USER, GIT_TOKEN        (only if the code repo is private)
+Add-ons > Secrets (the notebook must be attached to both):
+  CLEARML_KEY      access key of the credentials created on app.clear.ml
+  CLEARML_SECRET   secret key of the same credentials
+  GIT_USER, GIT_TOKEN        (optional, only if the code repo is private)
 
 Last cell of the notebook (it blocks while the agent is running):
 
@@ -22,9 +23,11 @@ from kaggle_secrets import UserSecretsClient
 QUEUE = "kaggle"
 
 secrets = UserSecretsClient()
-for key in ("CLEARML_API_HOST", "CLEARML_WEB_HOST", "CLEARML_FILES_HOST",
-            "CLEARML_API_ACCESS_KEY", "CLEARML_API_SECRET_KEY"):
-    os.environ[key] = secrets.get_secret(key)
+os.environ["CLEARML_API_HOST"] = "https://api.clear.ml"        # hosted server; change for a self-hosted one
+os.environ["CLEARML_WEB_HOST"] = "https://app.clear.ml"
+os.environ["CLEARML_FILES_HOST"] = "https://files.clear.ml"
+os.environ["CLEARML_API_ACCESS_KEY"] = secrets.get_secret("CLEARML_KEY").strip()
+os.environ["CLEARML_API_SECRET_KEY"] = secrets.get_secret("CLEARML_SECRET").strip()
 try:                                                    # private repo: the agent clones it with these
     os.environ["CLEARML_AGENT_GIT_USER"] = secrets.get_secret("GIT_USER")
     os.environ["CLEARML_AGENT_GIT_PASS"] = secrets.get_secret("GIT_TOKEN")

@@ -1,7 +1,7 @@
 # Running the pipeline on a Kaggle GPU
 
 1. New Kaggle notebook: Accelerator = GPU, Internet = On.
-2. Add the secrets listed at the top of `start_agent.py` (ClearML credentials of a server Kaggle can reach).
+2. Add the two secrets named at the top of `start_agent.py` (CLEARML_KEY, CLEARML_SECRET).
 3. Run `start_agent.py` as the last cell. The agent now serves the `kaggle` queue.
 4. From your machine:
 
