@@ -32,7 +32,7 @@ except ImportError:  # allows running without clearml installed
 # Packages imported lazily (via Hydra _target_ strings / inside functions) are invisible to
 # ClearML's static import analysis, so the agent would not install them -> add explicitly.
 FORCED_REQUIREMENTS = ["lightning", "pandas", "segmentation_models_pytorch", "torchgeo", "hydra-core", "omegaconf", "rasterio",
-                       "scikit-learn", "scipy", "onnx", "onnxruntime", "opencv-python-headless"]
+                       "scikit-learn", "scipy", "onnxruntime", "opencv-python-headless"]
 
 
 class Reporter:
@@ -112,9 +112,11 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     # exactly those, so an agent image / offline mirror has to provide the same versions.
     for pkg in FORCED_REQUIREMENTS:
         Task.add_requirements(pkg)
-    # torch.onnx.export imports `onnx`, whose generated code needs protobuf >= 6; Kaggle's system protobuf is 5.x and
-    # ClearML records no version for packages the code does not import itself, so the clash only showed on the agent.
-    Task.add_requirements("protobuf", ">=6.31.1")
+    # torch.onnx.export imports `onnx`. onnx >= 1.19 is generated with protobuf 6 and refuses to load next to Kaggle's
+    # system protobuf 5.29 (a venv copy of protobuf does not help: Kaggle's `google.*` namespace packages win).
+    # onnx < 1.19 has no protobuf version check and exports fine with torch 2.14 (checked: parity 1e-5).
+    Task.add_requirements("onnx", "<1.19")
+    Task.add_requirements("protobuf", "<6")
 
     # 1) Task.init -- reuse_last_task_id=False => every call makes a fresh Task (no overwritten history)
     task = Task.init(

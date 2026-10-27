@@ -12,6 +12,7 @@ scikit-learn
 scipy
 numpy
 pillow
-onnx
+onnx<1.19          # >= 1.19 needs protobuf 6, which clashes with Kaggle's system protobuf 5
+protobuf>=5.29,<6
 onnxruntime
 opencv-python-headless==4.13.0.92   # same as the Chisel server lock file; 4.14.0 segfaults on a tiny resize on macOS arm64
