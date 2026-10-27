@@ -50,3 +50,5 @@ Every ClearML call is a standard API call; look the class/method up in the Clear
 | `src/hpo.py` | `HyperParameterOptimizer` + `OptimizerOptuna`; `Task.clone`, `Task.enqueue` (manual mode) | hyperparameter search over clones of the train Task |
 
 Hydra stays the only config authority: ClearML "Overrides" are re-applied on top of it (`recompose`).
+
+A step-by-step guide for people new to ClearML is in [docs/GUIDE.md](docs/GUIDE.md).

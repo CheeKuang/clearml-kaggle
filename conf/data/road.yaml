@@ -1,0 +1,6 @@
+# ONE binary class for a per-class model (production serves one model per class).
+defaults:
+  - _loveda_base
+  - _self_
+classes:
+  road: [3]

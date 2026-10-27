@@ -1,0 +1,10 @@
+# ALL classes in ONE multi-label model (one output channel per entry). Production serves one model per class:
+# use building / road / water / vegetation for that.
+defaults:
+  - _loveda_base
+  - _self_
+classes:                  # name -> list of mask ids that count as that class (independent binary channels)
+  building: [2]
+  road: [3]
+  water: [4]
+  vegetation: [6, 7]      # forest + agriculture (LoveDA has no single "vegetation" class)

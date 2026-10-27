@@ -2,7 +2,8 @@
 
 Standalone preflight (domain shift + label balance between reference and candidate split) as its own
 ClearML Task, so a pipeline can run it before training. Same checks and gate semantics as the preflight
-inside src.train: exit code 2 + Task marked failed when a `gate` check is violated."""
+inside src.train: exit code 2 + Task marked failed when a `gate` check is violated.
+Register the base task by running this with NO extra arguments (see docs/GUIDE.md)."""
 from __future__ import annotations
 
 import sys

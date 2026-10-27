@@ -1,11 +1,28 @@
-"""ClearML <-> Hydra glue: Task.init, Task.connect (editable hyperparameters), recompose, Logger wrapper."""
+"""ClearML <-> Hydra glue: Task.init, Task.connect (editable hyperparameters), recompose, Logger wrapper.
+
+READ THIS FIRST (how remote runs get their settings)
+  * Hydra is the only config authority. ClearML never edits the YAML files.
+  * `init_clearml` publishes the keys listed in conf/config.yaml `clearml.tunable` as the task's "Overrides"
+    hyperparameters. When an agent runs a CLONE whose Overrides were changed (UI, HPO or a pipeline's
+    parameter_override), the changed values come back through task.connect() and the config is recomposed.
+  * A setting can therefore only be changed remotely if its key is in `clearml.tunable`.
+Traps this file already handles (do not undo them):
+  * connect() updates the dict you pass IN PLACE on remote runs -> keep a copy before calling it.
+  * connect() casts remote values to the type of the local default (0.3 over an int 8 is dropped) -> every
+    value is connected as text and Hydra parses it.
+  * ClearML stores None as "None" or "" -> _fmt() maps both back to Hydra's `null`.
+Docs: Task.init, Task.connect, Task.connect_configuration, Task.execute_remotely.
+"""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
+
+from .data import class_names
 
 try:
     from clearml import Task
@@ -15,7 +32,7 @@ except ImportError:  # allows running without clearml installed
 # Packages imported lazily (via Hydra _target_ strings / inside functions) are invisible to
 # ClearML's static import analysis, so the agent would not install them -> add explicitly.
 FORCED_REQUIREMENTS = ["lightning", "pandas", "segmentation_models_pytorch", "torchgeo", "hydra-core", "omegaconf", "rasterio",
-                       "scikit-learn", "scipy"]
+                       "scikit-learn", "scipy", "onnx", "onnxruntime", "opencv-python-headless"]
 
 
 class Reporter:
@@ -53,11 +70,17 @@ class Reporter:
 
 # ----------------------------------------------------------------------------- hydra helpers
 def _fmt(v: Any) -> str:
+    """Value -> the text of a Hydra override (`key=<this>`). Also the canonical form used to compare values."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if v is None or v in ("None", ""):      # ClearML stringifies None (as "None" or "")
         return "null"
     return str(v)
+
+
+def _quote(text: str) -> str:
+    """Hydra override values containing = , : [ ] { } ( ) quotes or spaces must be quoted."""
+    return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'" if re.search(r"[=,:\[\]{}()\s'\"\\]", text) else text
 
 
 def tunable_state(cfg: DictConfig, hc: HydraConfig) -> dict[str, Any]:
@@ -70,10 +93,11 @@ def tunable_state(cfg: DictConfig, hc: HydraConfig) -> dict[str, Any]:
 
 
 def recompose(hc: HydraConfig, tunables: dict[str, Any]) -> DictConfig:
-    """Rebuild the config = original CLI overrides (minus tunable keys) + tunable values."""
+    """Rebuild the config = original CLI overrides (minus tunable keys) + tunable values.
+    Tunable keys are dropped from the CLI part so the (possibly edited) tunable value wins."""
     keys = set(tunables)
     cli = [o for o in hc.overrides.task if o.lstrip("+~").split("=")[0] not in keys]
-    overrides = cli + [f"{k}={_fmt(v)}" for k, v in tunables.items()]
+    overrides = cli + [f"{k}={_quote(_fmt(v))}" for k, v in tunables.items()]
     return hydra.compose(config_name=hc.job.config_name, overrides=overrides)
 
 
@@ -84,7 +108,8 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
         return None, cfg
     c = cfg.clearml
 
-    # must run before Task.init
+    # must run before Task.init. ClearML records the package versions of THIS machine and the agent installs
+    # exactly those, so an agent image / offline mirror has to provide the same versions.
     for pkg in FORCED_REQUIREMENTS:
         Task.add_requirements(pkg)
 
@@ -114,10 +139,11 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     task.connect_configuration(OmegaConf.to_container(cfg, resolve=True), name="resolved_config",
                                description="Final Hydra config after overrides",
                                ignore_remote_overrides=True)
-    task.connect_label_enumeration({"background": 0, "building": 1})
+    task.connect_label_enumeration({"background": 0, **{n: i + 1 for i, n in enumerate(class_names(cfg.data))}})
     task.add_tags([str(cfg.model.arch), str(cfg.model.encoder_name), str(cfg.pretrain.source)])
 
-    # 4) optional: ship this run to an agent queue (e.g. a clearml-agent running inside a Kaggle notebook)
+    # 4) optional: ship this run to an agent queue (e.g. a clearml-agent running inside a Kaggle notebook).
+    #    On the agent this branch is not used: the agent runs a clone that already exists.
     if c.execute_remotely:
         task.execute_remotely(queue_name=c.queue, clone=c.clone_on_remote, exit_process=True)
     return task, cfg

@@ -4,13 +4,17 @@ Can this model run inference inside the production envelope (cpu_request / cpu_l
 Needs no data: the model is built from the config with random weights (cost is identical, nothing is
 downloaded) and a dummy tile is timed at `cpu_request` and `cpu_limit` threads. Run it on a queue whose
 agent enforces the production limits (k8s pod requests/limits or docker --cpus/--memory), otherwise the
-numbers describe the host, not the envelope."""
+numbers describe the host, not the envelope.
+
+Traps (already fixed, do not undo): segmentation_models_pytorch is imported at the top, BEFORE Task.init
+(imported lazily after ClearML's import hooks it hung inside `import triton` on Kaggle); ru_maxrss is bytes on
+macOS but KiB on Linux. Progress lines and the periodic stack dump exist so a stall is visible in the Task log.
+Exit code 2 = gate failed."""
 from __future__ import annotations
 
 import faulthandler
 import json
 import os
-import resource
 import sys
 import time
 from pathlib import Path
@@ -23,40 +27,8 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from .clearml_utils import Reporter, init_clearml
+from .envinfo import GIB, cgroup_limits, peak_rss_gib
 from .model_factory import build_model
-
-GIB = 1024 ** 3
-
-
-def _read(path: str) -> str | None:
-    try:
-        return Path(path).read_text().strip()
-    except OSError:
-        return None
-
-
-def cgroup_limits() -> tuple[float | None, float | None]:
-    """(cpus, mem_gib) the container is actually limited to; None = unlimited / not in a cgroup."""
-    cpu = mem = None
-    cm = _read("/sys/fs/cgroup/cpu.max")                       # cgroup v2: "<quota|max> <period>"
-    if cm:
-        quota, period = cm.split()
-        cpu = None if quota == "max" else int(quota) / int(period)
-    else:                                                      # cgroup v1
-        q, p = _read("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"), _read("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
-        if q and p and int(q) > 0:
-            cpu = int(q) / int(p)
-    mm = _read("/sys/fs/cgroup/memory.max") or _read("/sys/fs/cgroup/memory/memory.limit_in_bytes")
-    if mm and mm != "max" and int(mm) < 1 << 60:
-        mem = int(mm) / GIB
-    return cpu, mem
-
-
-def peak_rss_gib() -> float:
-    """Peak resident memory of this process (includes the torch import itself)."""
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss     # bytes on macOS, KiB on Linux
-    return r * (1 if sys.platform == "darwin" else 1024) / GIB
-
 
 @torch.inference_mode()
 def bench(model, x, threads: int, warmup: int, iters: int) -> np.ndarray:

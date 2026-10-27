@@ -6,3 +6,4 @@ divide_by: 255.0
 mean: null                # optional per-channel lists
 std: null
 splits: {train: train, val: val}
+classes: null            # null = ONE binary mask where mask > 0 (masks must already be binary). See loveda.yaml for several classes.

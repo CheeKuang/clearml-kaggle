@@ -1,0 +1,18 @@
+# serve_gate: can ALL the production models run together inside the container limits?
+# It reproduces the Chisel server's inference path (src/serve_check.py): onnxruntime CPU sessions, thread pool,
+# 1280 x 1280 tiles. Only meaningful on an agent that enforces the real limits (docker --cpus / --memory, k8s pod).
+enabled: true
+mode: gate                # gate = fail the Task (exit code 2) on a violation | diagnostic = report only
+source: random            # random = untrained models listed in `spec` (before training; same cost as trained ones)
+                          # tasks  = ONNX artifacts of the pipeline's train_<class> steps (after training)
+                          # folder = the .onnx files in `folder`
+spec: "building=unet:resnet34_imagenet,road=unet:resnet34_imagenet,water=unet:resnet34_imagenet,vegetation=unet:resnet34_imagenet"   # class=architecture:encoder, comma separated
+folder: null
+tile_size: 1280           # the server's INPUT_SIZE / SLICE_SIZE
+tiles: 1                  # tiles per request: 1 = a crop up to 1280 x 1280
+repeats: 3
+workers: 2                # the server's THREAD_POOL_SIZE
+intra: 2                  # onnxruntime threads per model (the server uses 2)
+cpu_limit: 8              # production container: 4 vCPU request, 8 vCPU limit, 8 GiB memory
+memory_limit_gib: 8
+max_request_s: null       # p95 request time limit in seconds (null = report only)

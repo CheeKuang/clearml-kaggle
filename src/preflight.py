@@ -100,17 +100,22 @@ def run_preflight(cfg, reporter, ref_ds, cand_ds, out_dir: Path) -> dict:
 
     if p.label_balance.enabled:
         b = p.label_balance
-        ra, rb = ref_ds.building_ratios(), cand_ds.building_ratios()
-        s = label_balance(ra, rb)
-        v = []
-        if s["wasserstein"] > b.max_wasserstein:
-            v.append(f"wasserstein {s['wasserstein']:.4f} > {b.max_wasserstein}")
-        if b.max_ratio_gap is not None and s["ratio_gap_rel"] > b.max_ratio_gap:
-            v.append(f"ratio_gap_rel {s['ratio_gap_rel']:.3f} > {b.max_ratio_gap}")
-        bins = np.linspace(0, max(ra.max(), rb.max(), 1e-6), 21)
-        for name, r in (("reference", ra), ("candidate", rb)):
-            reporter.histogram("preflight/label_balance", name, np.histogram(r, bins)[0], 0,
-                               xlabels=[f"{x:.3f}" for x in bins[:-1]])
+        RA, RB = ref_ds.class_ratios(), cand_ds.class_ratios()          # (tiles, classes)
+        names = ref_ds.class_names
+        s, v = {}, []
+        for c, cname in enumerate(names):                                # every class is checked on its own
+            ra, rb = RA[:, c], RB[:, c]
+            sc = label_balance(ra, rb)
+            s.update({(k if len(names) == 1 else f"{cname}/{k}"): val for k, val in sc.items()})
+            tag = "" if len(names) == 1 else f"[{cname}] "
+            if sc["wasserstein"] > b.max_wasserstein:
+                v.append(f"{tag}wasserstein {sc['wasserstein']:.4f} > {b.max_wasserstein}")
+            if b.max_ratio_gap is not None and sc["ratio_gap_rel"] > b.max_ratio_gap:
+                v.append(f"{tag}ratio_gap_rel {sc['ratio_gap_rel']:.3f} > {b.max_ratio_gap}")
+            bins = np.linspace(0, max(ra.max(), rb.max(), 1e-6), 21)
+            for name, r in (("reference", ra), ("candidate", rb)):
+                reporter.histogram(f"preflight/label_balance/{cname}", name, np.histogram(r, bins)[0], 0,
+                                   xlabels=[f"{x:.3f}" for x in bins[:-1]])
         finish("label_balance", b, s, v)
 
     (out_dir / "preflight.json").write_text(json.dumps(results, indent=2))

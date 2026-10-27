@@ -6,6 +6,7 @@ import segmentation_models_pytorch as smp
 import torch
 
 from .clearml_logger import ClearMLLogger
+from .data import class_names
 from .model_factory import build_model
 
 
@@ -19,18 +20,26 @@ def overlay(x, y, p) -> np.ndarray:
 
 
 class SegModule(L.LightningModule):
-    """Single-device module (metrics are accumulated locally, not synced across ranks)."""
+    """Single-device module (metrics are accumulated locally, not synced across ranks).
+
+    Multi-label: the model outputs one logit channel per class (cfg.data.classes; one channel when none),
+    each trained and scored as an independent binary mask. `val/iou` and `val/f1` are the MEAN over classes
+    (it is the HPO objective); `val/iou_<class>` and `val/f1_<class>` are the per-class values."""
 
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg                       # Hydra config stays the source of truth (no save_hyperparameters)
         self.model = build_model(cfg)
-        self.dice = smp.losses.DiceLoss("binary", from_logits=True)
+        self.names = class_names(cfg.data)
+        self.dice = smp.losses.DiceLoss("binary" if len(self.names) == 1 else "multilabel", from_logits=True)
         self.best_iou, self.best_epoch = -1.0, -1
 
     def loss(self, logits, y):
         c = self.cfg.loss
-        pw = None if c.pos_weight is None else torch.tensor(float(c.pos_weight), device=logits.device)
+        # pos_weight: one number for every class, or a list with one number per class
+        pw = None if c.pos_weight is None else torch.as_tensor(c.pos_weight, dtype=torch.float32, device=logits.device)
+        if pw is not None and pw.ndim == 1:
+            pw = pw.view(-1, 1, 1)
         bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, y, pos_weight=pw)
         return c.bce_weight * bce + c.dice_weight * self.dice(logits, y)
 
@@ -44,28 +53,36 @@ class SegModule(L.LightningModule):
         return loss
 
     def on_validation_epoch_start(self):
-        self._counts = torch.zeros(3, device=self.device)   # tp, fp, fn
+        self._counts = torch.zeros(len(self.names), 3, device=self.device)   # tp, fp, fn per class
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         lo = self(x)
         p = (lo.sigmoid() > 0.5).float()
-        self._counts += torch.stack([(p * y).sum(), (p * (1 - y)).sum(), ((1 - p) * y).sum()])
+        self._counts += torch.stack([(p * y).sum((0, 2, 3)), (p * (1 - y)).sum((0, 2, 3)),
+                                     ((1 - p) * y).sum((0, 2, 3))], dim=1)
         self.log("val/loss", self.loss(lo, y), on_step=False, on_epoch=True)
         if batch_idx == 0:
             self._sample = (x[0].float().cpu(), y[0].cpu(), lo[0].sigmoid().float().cpu())
 
     def on_validation_epoch_end(self):
-        tp, fp, fn = self._counts
-        iou, f1 = tp / (tp + fp + fn + 1e-8), 2 * tp / (2 * tp + fp + fn + 1e-8)
-        self.log("val/iou", iou)          # <- HPO objective (title=val, series=iou)
+        tp, fp, fn = self._counts.unbind(1)
+        iou_c, f1_c = tp / (tp + fp + fn + 1e-8), 2 * tp / (2 * tp + fp + fn + 1e-8)   # one value per class
+        iou, f1 = iou_c.mean(), f1_c.mean()
+        self.log("val/iou", iou)          # <- HPO objective (title=val, series=iou), mean over classes
         self.log("val/f1", f1)
+        if len(self.names) > 1:
+            for n, i_, f_ in zip(self.names, iou_c, f1_c):
+                self.log(f"val/iou_{n}", i_)
+                self.log(f"val/f1_{n}", f_)
         if not self.trainer.sanity_checking:
             if iou.item() > self.best_iou:
                 self.best_iou, self.best_epoch = iou.item(), self.current_epoch
             if isinstance(self.logger, ClearMLLogger):
-                self.logger.report_image("val/samples", "pred(red) vs gt(green)",
-                                         overlay(*self._sample), self.current_epoch)
+                x, y, p = self._sample
+                for c, n in enumerate(self.names):      # one overlay per class
+                    self.logger.report_image(f"val/samples_{n}", "pred(red) vs gt(green)",
+                                             overlay(x, y[c:c + 1], p[c:c + 1]), self.current_epoch)
 
     def configure_optimizers(self):
         o = self.cfg.optimizer

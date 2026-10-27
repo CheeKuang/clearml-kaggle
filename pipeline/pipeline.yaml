@@ -1,22 +1,39 @@
-# Gated training pipeline:  resource_check ─┐
-#                                            ├─> train
-#                           domain_check   ─┘
-# Each step clones a base Task: run each script once first (see README) so the tasks exist.
-name: gated-training
+# Per-class gated pipeline (production serves ONE model per class):
+#
+#   domain_check ──┐                    ┌─> train_building ─┐
+#                  ├─> (both gates) ────┼─> train_road      ├─> serve_gate_post
+#   serve_gate_pre ┘                    ├─> train_water     │   (the real ONNX models, all together)
+#   (untrained models of the chosen     └─> train_vegetation┘
+#    architectures, all together)
+#
+# Each step clones a base Task: register the base tasks first (docs/GUIDE.md, section 9) on the CURRENT commit.
+# Checklist before running: (1) code pushed and base tasks point at that commit, (2) an agent listens on every queue
+# named below, (3) data.clearml_dataset_id is the multi-class dataset (python -m src.dataset ... --name loveda-multi).
+# serve_gate only means something on an agent that enforces the production limits (4 request / 8 limit vCPU, 8 GiB).
+name: gated-training-per-class
 project: building-segmentation
-version: "1.0.0"
-controller_queue: services      # queue served by an agent that runs the pipeline controller itself
+version: "2.0.0"
+controller_queue: services      # queue served by an agent that runs the pipeline controller itself (or use --local)
 
-steps:
-  resource_check: {task: resource-check, queue: inference-sim}   # queue whose agent enforces 4 request / 8 limit vCPU, 8 GiB
-  domain_check:   {task: domain-check,   queue: cpu}
-  train:          {task: Unet-resnet34,  queue: kaggle}          # = ${model.arch}-${model.encoder_name} of the run that created it
+steps:                          # task = name of the base Task in the ClearML project, queue = where its agent listens
+  domain_check: {task: domain-check, queue: kaggle}           # image + label-balance check over all classes
+  serve_gate:   {task: serve-gate,   queue: kaggle}           # runs twice: before (untrained) and after training
+  train:        {task: Unet-resnet34, queue: kaggle}          # cloned once per class
+
+# One model per class. The key is the data config (conf/data/<class>.yaml) and the class name in production.
+# Architecture and encoder may differ per class (names of conf/architecture/ and conf/encoder/).
+classes:
+  building:   {architecture: unet, encoder: resnet34_imagenet}
+  road:       {architecture: unet, encoder: resnet34_imagenet}
+  water:      {architecture: unet, encoder: resnet34_imagenet}
+  vegetation: {architecture: unet, encoder: resnet34_imagenet}
 
 # Written to "Overrides/<key>" on every step (same keys as clearml.tunable in conf/config.yaml).
 params:
-  architecture: unet
-  encoder: resnet34_imagenet
-  data.clearml_dataset_id: 2be0c2997c1348be9b5315fa0cf15b92   # loveda-buildings
+  data.clearml_dataset_id: null   # TODO: id printed by `python -m src.dataset --path data/loveda_multi --name loveda-multi`
 
-train_params:                       # train step only
+train_params:                       # train steps only
   preflight.enabled: false          # domain_check already gated this run
+
+serve_params:                       # both serve_gate steps (the production limits are in conf/serve/default.yaml)
+  serve.memory_limit_gib: 8

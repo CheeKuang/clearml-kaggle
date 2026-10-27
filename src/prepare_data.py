@@ -1,11 +1,15 @@
-"""Turn the flat LoveDA folder into the train/val layout src.data.TileDataset reads, with binary building masks.
+"""Turn the flat LoveDA folder into the train/val layout src.data.TileDataset reads.
 
-  python -m src.prepare_data --src data/loveda --out data/loveda_split
-  python -m src.dataset --path data/loveda_split          # then upload to ClearML
+  python -m src.prepare_data --src data/loveda --out data/loveda_multi                 # class-id masks (default)
+  python -m src.prepare_data --src data/loveda --out data/loveda_split --mode binary   # one building mask
+  python -m src.dataset --path data/loveda_multi --name loveda-multi                    # then upload to ClearML
 
-  <src>/images/*.png, <src>/masks/*.png   (LoveDA: 0 no-data, 1 background, 2 building, 3 road, ...)
+  <src>/images/*.png, <src>/masks/*.png   (LoveDA: 0 no-data, 1 background, 2 building, 3 road, 4 water,
+                                           5 barren, 6 forest, 7 agriculture)
   -> <out>/{train,val}/images/*.png        (copied)
-     <out>/{train,val}/masks/*.png         (0 = not building, 255 = building; the loader uses mask > 0)
+     <out>/{train,val}/masks/*.png         mode labels: the original class ids, copied unchanged. conf/data/loveda.yaml
+                                           (`data.classes`) decides which ids form which binary output channel.
+                                           mode binary: 0 = not building, 255 = building (conf/data/buildings.yaml).
 
 The split is random per tile (seeded). Neighbouring tiles of one scene can land on both sides, so val IoU
 can be optimistic; split by scene/city instead if you have that information.
@@ -23,8 +27,9 @@ from PIL import Image
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default="data/loveda")
-    ap.add_argument("--out", default="data/loveda_split")
-    ap.add_argument("--building-class", type=int, default=2)
+    ap.add_argument("--out", default="data/loveda_multi")
+    ap.add_argument("--mode", choices=["labels", "binary"], default="labels")
+    ap.add_argument("--building-class", type=int, default=2, help="mode binary only")
     ap.add_argument("--val-frac", type=float, default=0.2)
     ap.add_argument("--seed", type=int, default=42)
     a = ap.parse_args()
@@ -43,17 +48,25 @@ def main():
     for split in ("train", "val"):
         (out / split / "images").mkdir(parents=True)
         (out / split / "masks").mkdir(parents=True)
-    ratios = {"train": [], "val": []}
+    ratios = {"train": [], "val": []}          # per tile: fraction of pixels per class id 0..7 (labels) / building (binary)
     for n in names:
         split = "val" if n in val else "train"
         shutil.copy2(src / "images" / n, out / split / "images" / n)
-        building = np.array(Image.open(src / "masks" / n)) == a.building_class
-        Image.fromarray(building.astype(np.uint8) * 255).save(out / split / "masks" / n)
-        ratios[split].append(building.mean())
+        raw = np.array(Image.open(src / "masks" / n))
+        if a.mode == "labels":
+            shutil.copy2(src / "masks" / n, out / split / "masks" / n)
+            ratios[split].append(np.bincount(raw.ravel(), minlength=8)[:8] / raw.size)
+        else:
+            building = raw == a.building_class
+            Image.fromarray(building.astype(np.uint8) * 255).save(out / split / "masks" / n)
+            ratios[split].append([building.mean()])
 
     for split, r in ratios.items():
-        print(f"{split}: {len(r)} tiles, mean building ratio {np.mean(r):.3f}, "
-              f"tiles without buildings {int(np.sum(np.asarray(r) == 0))}")
+        r = np.asarray(r)
+        if a.mode == "labels":
+            print(f"{split}: {len(r)} tiles; mean pixel share per class id 0..7: " + " ".join(f"{x:.3f}" for x in r.mean(0)))
+        else:
+            print(f"{split}: {len(r)} tiles, mean building ratio {r.mean():.3f}, tiles without buildings {int((r == 0).sum())}")
     print(f"written to {out}")
 
 
