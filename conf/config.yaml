@@ -65,3 +65,5 @@ clearml:
     - preflight.enabled
     - preflight.domain_shift.mode
     - preflight.label_balance.mode
+    - resource.memory_limit_gib
+    - resource.max_latency_s
