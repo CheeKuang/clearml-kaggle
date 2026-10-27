@@ -1,0 +1,4 @@
+# @package model
+_target_: segmentation_models_pytorch.create_model
+arch: DeepLabV3Plus
+decoder_channels: 256

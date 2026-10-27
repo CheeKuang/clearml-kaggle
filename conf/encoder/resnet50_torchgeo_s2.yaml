@@ -1,0 +1,10 @@
+# @package _global_
+# smp builds the architecture with random encoder weights, then the factory loads
+# the torchgeo state dict into model.encoder. Needs data.in_channels == 13.
+model:
+  encoder_name: resnet50
+  encoder_weights: null
+pretrain:
+  source: torchgeo
+  weights_enum: ResNet50_Weights
+  weights_name: SENTINEL2_ALL_MOCO

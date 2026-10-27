@@ -1,0 +1,22 @@
+# Gated training pipeline:  resource_check ─┐
+#                                            ├─> train
+#                           domain_check   ─┘
+# Each step clones a base Task: run each script once first (see README) so the tasks exist.
+name: gated-training
+project: building-segmentation
+version: "1.0.0"
+controller_queue: services      # queue served by an agent that runs the pipeline controller itself
+
+steps:
+  resource_check: {task: resource-check, queue: inference-sim}   # queue whose agent enforces 4 request / 8 limit vCPU, 8 GiB
+  domain_check:   {task: domain-check,   queue: cpu}
+  train:          {task: Unet-resnet34,  queue: kaggle}          # = ${model.arch}-${model.encoder_name} of the run that created it
+
+# Written to "Overrides/<key>" on every step (same keys as clearml.tunable in conf/config.yaml).
+params:
+  architecture: unet
+  encoder: resnet34_imagenet
+  data.clearml_dataset_id: null     # set to the id printed by the dataset upload
+
+train_params:                       # train step only
+  preflight.enabled: false          # domain_check already gated this run

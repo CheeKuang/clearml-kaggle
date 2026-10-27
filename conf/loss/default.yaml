@@ -1,0 +1,3 @@
+bce_weight: 0.5
+dice_weight: 0.5
+pos_weight: null          # optional float for BCE; label_balance preflight helps choose it

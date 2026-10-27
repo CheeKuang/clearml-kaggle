@@ -1,0 +1,15 @@
+# Optuna search space. Names are Hydra override keys (same keys as clearml.tunable in conf/config.yaml).
+base_task: {project: building-segmentation, name: unet-resnet34}   # a task created by one run of src.train
+controller_task_name: optuna-hpo
+queue: kaggle
+n_trials: 30
+max_concurrent: 2
+objective: {title: val, series: iou, sign: max_global}   # max_global = best value over all epochs
+seed: 42
+space:
+  - {name: optimizer.lr,        type: log_uniform, min: 1.0e-5, max: 1.0e-2}
+  - {name: optimizer.weight_decay, type: log_uniform, min: 1.0e-6, max: 1.0e-2}
+  - {name: loss.dice_weight,    type: uniform,     min: 0.2, max: 0.8}
+  - {name: train.batch_size,    type: choice,      values: [4, 8, 16]}
+  - {name: architecture,        type: choice,      values: [unet, fpn, deeplabv3plus]}
+  - {name: encoder,             type: choice,      values: [resnet34_imagenet]}

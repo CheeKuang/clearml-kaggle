@@ -1,0 +1,10 @@
+data/
+outputs/
+multirun/
+.venv/
+__pycache__/
+*.pyc
+*.ckpt
+.DS_Store
+clearml.conf
+.env

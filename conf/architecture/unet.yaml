@@ -1,0 +1,4 @@
+# @package model
+_target_: segmentation_models_pytorch.create_model
+arch: Unet
+decoder_channels: [256, 128, 64, 32, 16]

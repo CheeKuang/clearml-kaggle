@@ -1,0 +1,14 @@
+clearml>=1.16
+hydra-core>=1.3
+omegaconf>=2.3
+optuna>=3.6
+segmentation-models-pytorch>=0.3.3
+torchgeo>=0.5
+torch
+lightning>=2.2
+pandas
+rasterio
+scikit-learn
+scipy
+numpy
+pillow
