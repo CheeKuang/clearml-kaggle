@@ -101,10 +101,12 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
 
     # 2) Task.connect -- the dict shows under "Overrides" in the UI. When an agent runs a clone, the
     #    values edited in the UI (or set by the HPO controller) come back here.
-    state = tunable_state(cfg, hc)
+    # values go in as text: connect() casts remote values back to the type of the local default, which drops
+    # e.g. "0.3" over an int default (8); Hydra parses the text when the config is recomposed
+    state = {k: _fmt(v) for k, v in tunable_state(cfg, hc).items()}
     original = dict(state)                       # connect() updates `state` in place on remote runs
-    tunables = dict(task.connect(state, name="Overrides"))
-    if {k: _fmt(v) for k, v in tunables.items()} != {k: _fmt(v) for k, v in original.items()}:
+    tunables = {k: _fmt(v) for k, v in task.connect(state, name="Overrides").items()}
+    if tunables != original:
         cfg = recompose(hc, tunables)
         print(f"[clearml] config recomposed with remote overrides: {tunables}")
 
