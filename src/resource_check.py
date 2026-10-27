@@ -17,6 +17,7 @@ from pathlib import Path
 
 import hydra
 import numpy as np
+import segmentation_models_pytorch  # noqa: F401  (import before Task.init, like src.train: lazily imported after ClearML's import hooks it hung in `import triton` on Kaggle)
 import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
