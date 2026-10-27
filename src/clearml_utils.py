@@ -102,8 +102,9 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     # 2) Task.connect -- the dict shows under "Overrides" in the UI. When an agent runs a clone, the
     #    values edited in the UI (or set by the HPO controller) come back here.
     state = tunable_state(cfg, hc)
+    original = dict(state)                       # connect() updates `state` in place on remote runs
     tunables = dict(task.connect(state, name="Overrides"))
-    if {k: _fmt(v) for k, v in tunables.items()} != {k: _fmt(v) for k, v in state.items()}:
+    if {k: _fmt(v) for k, v in tunables.items()} != {k: _fmt(v) for k, v in original.items()}:
         cfg = recompose(hc, tunables)
         print(f"[clearml] config recomposed with remote overrides: {tunables}")
 
