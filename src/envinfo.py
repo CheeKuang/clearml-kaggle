@@ -33,6 +33,15 @@ def cgroup_limits() -> tuple[float | None, float | None]:
 
 
 def peak_rss_gib() -> float:
-    """Peak resident memory of this process (includes the torch import itself)."""
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss     # bytes on macOS, KiB on Linux
+    """Peak resident memory of THIS process image.
+    Linux: VmHWM from /proc/self/status. It starts again at exec, whereas ru_maxrss is inherited by a child from the
+    process that spawned it (a gate that exports in one process and measures in a subprocess would read the exporter's
+    peak). macOS has no /proc: ru_maxrss, which is in bytes there."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) * 1024 / GIB             # kB
+    except OSError:
+        pass
+    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss          # bytes on macOS, KiB on Linux
     return r * (1 if sys.platform == "darwin" else 1024) / GIB
