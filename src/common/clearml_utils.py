@@ -9,6 +9,8 @@ Traps handled here (do not undo):
   * connect() updates the dict you pass IN PLACE on remote runs -> compare against a copy.
   * connect() casts remote values to the local default's type (0.3 over an int 8 is dropped) -> connect text.
   * ClearML stores None as "None" or "" -> _fmt() maps both to Hydra's `null`.
+  * A clone carries the base task's value of EVERY tunable key -> only keys whose value differs from the base are
+    applied, so a group switch (loss=road) keeps the group's own values. Hyperparameters -> Resolved shows what ran.
 """
 from __future__ import annotations
 
@@ -131,9 +133,11 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     state = {k: _fmt(choices[k] if k in choices else OmegaConf.select(cfg, k)) for k in c.tunable}
     original = dict(state)
     tunables = {k: _fmt(v) for k, v in task.connect(state, name="Overrides").items()}
-    if tunables != original:
-        cfg = recompose(hc, tunables)
-        print(f"[clearml] config recomposed with remote overrides: {tunables}")
+    # Only the values the clone CHANGED: a clone inherits the base task's value of every key, so re-applying an
+    # unchanged loss.bce_weight=0.5 after loss=road would override road.yaml's own weight.
+    if changed := {k: v for k, v in tunables.items() if v != original.get(k)}:
+        cfg = recompose(hc, changed)
+        print(f"[clearml] config recomposed with remote overrides: {changed}")
 
     task.connect_configuration(OmegaConf.to_container(cfg, resolve=True), name="resolved_config",
                                description="Final Hydra config after overrides", ignore_remote_overrides=True)
