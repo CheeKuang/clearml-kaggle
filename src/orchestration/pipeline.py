@@ -48,14 +48,15 @@ def plan(c, classes: list[str] | None = None) -> list[dict]:
 
 
 def newest_base_task_id(project: str, name: str) -> str:
-    """The newest NON-archived task with this exact name, whatever its status.
+    """The most recently CREATED non-archived task with this exact name, whatever its status.
     PipelineController's own lookup by name also returns archived tasks and skips `failed` ones, so after
-    re-registering it can silently pick an old base task pinned to an old commit."""
+    re-registering it can silently pick an old base task pinned to an old commit. Creation time, not last_update:
+    stopping or editing an old base task bumps its last_update and made it look newest."""
     from clearml import Task
 
     if not (tasks := Task.get_tasks(project_name=project, task_name=f"^{name}$", allow_archived=False)):
         raise SystemExit(f"no non-archived base task named {name!r} in project {project!r}")
-    return max(tasks, key=lambda t: t.data.last_update).id
+    return max(tasks, key=lambda t: t.data.created).id
 
 
 def build(c, classes: list[str] | None = None):
