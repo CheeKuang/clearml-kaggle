@@ -1,16 +1,12 @@
-# Running the pipeline on a Kaggle GPU
+# Running the agent on a Kaggle GPU
 
 1. New Kaggle notebook: Accelerator = GPU, Internet = On.
-2. Add the two secrets named at the top of `start_agent.py` (CLEARML_KEY, CLEARML_SECRET).
-3. Run `start_agent.py` as the last cell. The agent now serves the `kaggle` queue.
-4. From your machine:
+2. Add-ons -> Secrets: `CLEARML_KEY` and `CLEARML_SECRET` (app.clear.ml credentials), attached to the notebook.
+3. Cell 1: `!rm -rf /kaggle/working/repo && git clone https://github.com/CheeKuang/clearml-kaggle.git /kaggle/working/repo`
+4. Cell 2 (last, it keeps running): `%run /kaggle/working/repo/kaggle/start_agent.py`
+5. A worker such as `<host>:gpu0` appears on queue `kaggle` (ClearML -> Workers & Queues).
 
-       python -m src.train clearml.execute_remotely=true clearml.queue=kaggle data.clearml_dataset_id=<id>
+Then start runs from your machine, e.g. `python -m src.orchestration.pipeline --local --queue kaggle ...`
+(docs/GUIDE.md, sections 2.5 to 2.7). Verified: the per-class pipeline has run on this agent.
 
-   or `python -m src.pipeline` (train step uses the `kaggle` queue in `pipeline/pipeline.yaml`).
-
-Status: written from the ClearML agent docs, not yet run on Kaggle. If the task fails on package install,
-check the Execution tab (repo, commit, entry point) and the agent log first.
-
-The ClearML server must be reachable from the internet. `~/clearml.conf` on a dev machine usually points
-at `localhost`, which Kaggle cannot reach.
+The agent dies when the Kaggle session ends (tab closed, idle timeout, time limit); queued tasks then wait.

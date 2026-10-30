@@ -1,0 +1,43 @@
+@page { size: A4; margin: 16mm 14mm 18mm 14mm;
+  @bottom-center { content: counter(page); font: 9pt -apple-system, "Helvetica Neue", Arial, sans-serif; color: #777; } }
+html { font: 10.5pt/1.5 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1d1d1f; }
+body { max-width: none; margin: 0; }
+h1 { font-size: 20pt; margin: 0 0 6pt; color: #0b3d63; break-before: page; border-bottom: 2px solid #0b3d63; padding-bottom: 4pt; }
+h1:first-of-type, header + h1 { break-before: avoid; }
+h2 { font-size: 14pt; margin: 18pt 0 6pt; color: #0b3d63; break-after: avoid; }
+h3 { font-size: 11.5pt; margin: 14pt 0 4pt; color: #234; break-after: avoid; }
+p, li { orphans: 3; widows: 3; }
+code { font: 9pt "SF Mono", Menlo, Consolas, monospace; background: #f2f4f7; padding: 0 2px; border-radius: 3px; }
+pre { background: #f6f8fa; border: 1px solid #dde3ea; border-radius: 5px; padding: 7pt 9pt; overflow: hidden;
+      white-space: pre; break-inside: avoid; }
+pre code { font-size: 7.4pt; line-height: 1.35; background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; font-size: 9pt; break-inside: auto; }
+tr { break-inside: avoid; }
+th { background: #e8eef5; text-align: left; }
+th, td { border: 1px solid #cfd8e3; padding: 3pt 5pt; vertical-align: top; }
+td code, th code { font-size: 8.2pt; }
+blockquote { margin: 8pt 0; padding: 6pt 10pt; background: #fff8e6; border-left: 4px solid #e0a800; }
+blockquote p { margin: 0; }
+strong { color: #000; }
+hr { display: none; }
+#TOC { break-after: page; }
+#TOC ul { list-style: none; padding-left: 12pt; } #TOC > ul { padding-left: 0; }
+#TOC li { margin: 1pt 0; } #TOC a { color: #1d1d1f; text-decoration: none; }
+#TOC > ul > li > a { font-weight: 600; color: #0b3d63; }
+a { color: #0b5cad; text-decoration: none; }
+.cover { text-align: left; margin-top: 40mm; break-after: page; }
+.cover h1 { break-before: avoid; border: none; font-size: 26pt; }
+.cover p { font-size: 12pt; color: #444; }
+header#title-block-header { margin-top: 55mm; break-after: page; }
+header#title-block-header h1.title { break-before: avoid; border: none; font-size: 26pt; line-height: 1.2; }
+header#title-block-header .subtitle { font-size: 13pt; color: #444; margin-top: 8pt; }
+header#title-block-header .date { font-size: 10.5pt; color: #777; margin-top: 30pt; }
+body > h1:first-of-type { break-before: page; }
+/* code excerpts (Part 6): syntax colours from pandoc, long lines wrap instead of being cut off */
+div.sourceCode { break-inside: auto; margin: 4pt 0 8pt; }
+pre.sourceCode { white-space: pre-wrap; break-inside: auto; background: #f7f9fc; border-left: 3px solid #0b5cad; }
+pre.sourceCode code { font-size: 7.6pt; line-height: 1.35; white-space: pre-wrap; }
+pre.sourceCode code > span { display: inline !important; line-height: inherit !important; }
+pre.sourceCode code > span:empty { height: auto !important; }
+pre.sourceCode code > span { padding-left: 0 !important; text-indent: 0 !important; margin: 0 !important; }
+pre.sourceCode code > span > a { display: none !important; }

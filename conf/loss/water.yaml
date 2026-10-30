@@ -1,0 +1,6 @@
+# Water is ~11% of train pixels: lean a little on Dice. A starting point, not tuned.
+defaults:
+  - default
+  - _self_
+bce_weight: 0.4
+dice_weight: 0.6

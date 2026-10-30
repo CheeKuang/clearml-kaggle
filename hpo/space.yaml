@@ -1,5 +1,5 @@
 # Optuna search space. Names are Hydra override keys (same keys as clearml.tunable in conf/config.yaml).
-base_task: {project: building-segmentation, name: unet-resnet34}   # a task created by one run of src.train
+base_task: {project: building-segmentation, name: Unet-resnet34}   # registered by python -m src.training.train
 controller_task_name: optuna-hpo
 queue: kaggle
 n_trials: 30

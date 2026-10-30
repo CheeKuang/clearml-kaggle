@@ -6,9 +6,9 @@
 #   (untrained models of the chosen     └─> train_vegetation┘
 #    architectures, all together)
 #
-# Each step clones a base Task: register the base tasks first (docs/GUIDE.md, section 9) on the CURRENT commit.
+# Each step clones a base Task: register the base tasks first (docs/GUIDE.md, section 2.4) on the CURRENT commit.
 # Checklist before running: (1) code pushed and base tasks point at that commit, (2) an agent listens on every queue
-# named below, (3) data.clearml_dataset_id is the multi-class dataset (python -m src.dataset ... --name loveda-multi).
+# named below, (3) data.clearml_dataset_id is the multi-class dataset (python -m src.data.upload ... --name loveda-multi).
 # serve_gate only means something on an agent that enforces the production limits (4 request / 8 limit vCPU, 8 GiB).
 name: gated-training-per-class
 project: building-segmentation
@@ -21,16 +21,16 @@ steps:                          # task = name of the base Task in the ClearML pr
   train:        {task: Unet-resnet34, queue: kaggle}          # cloned once per class
 
 # One model per class. The key is the data config (conf/data/<class>.yaml) and the class name in production.
-# Architecture and encoder may differ per class (names of conf/architecture/ and conf/encoder/).
+# Architecture, encoder and loss may differ per class (names of conf/architecture/, conf/encoder/ and conf/loss/).
 classes:
-  building:   {architecture: unet, encoder: resnet34_imagenet}
-  road:       {architecture: unet, encoder: resnet34_imagenet}
-  water:      {architecture: unet, encoder: resnet34_imagenet}
-  vegetation: {architecture: unet, encoder: resnet34_imagenet}
+  building:   {architecture: unet, encoder: resnet34_imagenet, loss: building}
+  road:       {architecture: unet, encoder: resnet34_imagenet, loss: road}
+  water:      {architecture: unet, encoder: resnet34_imagenet, loss: water}
+  vegetation: {architecture: unet, encoder: resnet34_imagenet, loss: vegetation}
 
 # Written to "Overrides/<key>" on every step (same keys as clearml.tunable in conf/config.yaml).
 params:
-  data.clearml_dataset_id: null   # TODO: id printed by `python -m src.dataset --path data/loveda_multi --name loveda-multi`
+  data.clearml_dataset_id: null   # pass --param data.clearml_dataset_id=<id> (printed by python -m src.data.upload)
 
 train_params:                       # train steps only
   preflight.enabled: false          # domain_check already gated this run

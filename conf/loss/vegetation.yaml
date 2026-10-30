@@ -1,0 +1,4 @@
+# Vegetation is the largest class (~33% of train pixels): the plain default is enough. Untested beyond the 1-epoch run.
+defaults:
+  - default
+  - _self_

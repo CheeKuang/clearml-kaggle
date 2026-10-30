@@ -1,0 +1,7 @@
+# Building is ~4% of train pixels: more Dice, and positives count 2x in BCE. A starting point, not tuned.
+defaults:
+  - default
+  - _self_
+bce_weight: 0.4
+dice_weight: 0.6
+pos_weight: 2.0

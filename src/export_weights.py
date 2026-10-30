@@ -11,7 +11,7 @@ from pathlib import Path
 import segmentation_models_pytorch as smp
 import torch
 
-ap = argparse.ArgumentParser()
+ap = argparse.ArgumentParser() # create an argument parser for command-line options
 ap.add_argument("--encoder", default="resnet34")
 ap.add_argument("--weights", default="imagenet")
 ap.add_argument("--out", default=None)

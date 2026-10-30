@@ -1,0 +1,7 @@
+# Road is the rarest and thinnest class (~2.4% of train pixels): mostly Dice, positives count 3x in BCE. A starting point, not tuned.
+defaults:
+  - default
+  - _self_
+bce_weight: 0.3
+dice_weight: 0.7
+pos_weight: 3.0

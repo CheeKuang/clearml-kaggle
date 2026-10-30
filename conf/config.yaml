@@ -1,12 +1,11 @@
 # Hydra is the single config authority. Compose at the CLI, e.g.
-#   python -m src.train architecture=fpn encoder=resnet50_torchgeo_s2 loss.dice_weight=0.7
+#   python -m src.training.train data=road architecture=fpn loss.dice_weight=0.7
 defaults:
   - architecture: unet
   - encoder: resnet34_imagenet
   - loss: default
-  - data: loveda            # loveda = several binary classes; buildings = one binary mask (mask > 0)
+  - data: loveda            # building | road | water | vegetation = one class (production); loveda = all four
   - preflight: default
-  - resource: default
   - serve: default
   - _self_
 
@@ -55,13 +54,12 @@ clearml:                      # everything under here is about ClearML, not abou
   execute_remotely: false
   queue: kaggle
   clone_on_remote: false
-  # TO MAKE A SETTING EDITABLE from the ClearML UI, HPO or a pipeline: add its key here. Remote values are
-  # applied only for keys in this list (all are connected as text, Hydra parses them).
-  # Keys exposed through Task.connect -> editable in the UI and addressable by HPO as "Overrides/<key>".
-  # Group names (architecture, encoder) are allowed: the config is recomposed with Hydra.
+  # TO MAKE A SETTING EDITABLE from the ClearML UI, HPO or a pipeline, add its key here ("Overrides/<key>").
+  # Only these keys are applied remotely. Config groups (architecture, encoder, data) switch whole YAML files.
   tunable:
     - architecture
     - encoder
+    - loss                    # config group: loss/<class>.yaml (weights per class), default = 0.5 BCE + 0.5 Dice
     - data                    # config group: which class / dataset config (building, road, water, vegetation, loveda)
     - optimizer.lr
     - optimizer.weight_decay
@@ -74,8 +72,6 @@ clearml:                      # everything under here is about ClearML, not abou
     - preflight.enabled
     - preflight.domain_shift.mode
     - preflight.label_balance.mode
-    - resource.memory_limit_gib
-    - resource.max_latency_s
     - serve.source
     - serve.spec
     - serve.memory_limit_gib

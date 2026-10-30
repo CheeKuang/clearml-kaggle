@@ -37,5 +37,7 @@ except Exception:
 # Kaggle already ships a CUDA build of torch: let the agent's venv reuse it instead of reinstalling.
 Path("~/clearml.conf").expanduser().write_text("agent {\n  package_manager { system_site_packages: true }\n}\n")
 
+# Install and start the ClearML agent with the specified queue and GPU.
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "clearml-agent"])
 subprocess.run(["clearml-agent", "daemon", "--queue", QUEUE, "--gpus", "0"], check=True)
+#subprocess is to call shell commands from Python; here it installs the ClearML agent and starts it with the specified queue and GPU.

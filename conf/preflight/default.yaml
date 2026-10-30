@@ -11,8 +11,8 @@ domain_shift:             # k-NN interleaving
   k: 10
   max_shift: 0.5          # 0 = perfectly interleaved, 1 = fully separated
 
-label_balance:            # building-pixel ratio per tile + Wasserstein distance
+label_balance:            # positive-pixel share per tile and class + Wasserstein distance
   enabled: true
   mode: diagnostic
   max_wasserstein: 0.05
-  max_ratio_gap: 0.5      # relative gap between mean building ratios (null disables)
+  max_ratio_gap: 0.5      # relative gap between the mean shares (null disables)

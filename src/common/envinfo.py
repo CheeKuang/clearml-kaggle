@@ -1,4 +1,4 @@
-"""Container / process facts shared by the resource checks (no torch import, so it is safe everywhere)."""
+"""Container and process facts for the serving gate (no torch import, safe everywhere)."""
 from __future__ import annotations
 
 import resource
@@ -16,13 +16,12 @@ def _read(path: str) -> str | None:
 
 
 def cgroup_limits() -> tuple[float | None, float | None]:
-    """(cpus, mem_gib) the container is actually limited to; None = unlimited / not in a cgroup."""
+    """(cpus, mem_gib) this container is limited to; None = unlimited or not in a cgroup (v2, then v1)."""
     cpu = mem = None
-    cm = _read("/sys/fs/cgroup/cpu.max")                       # cgroup v2: "<quota|max> <period>"
-    if cm:
+    if cm := _read("/sys/fs/cgroup/cpu.max"):                       # v2: "<quota|max> <period>"
         quota, period = cm.split()
         cpu = None if quota == "max" else int(quota) / int(period)
-    else:                                                      # cgroup v1
+    else:
         q, p = _read("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"), _read("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
         if q and p and int(q) > 0:
             cpu = int(q) / int(p)
@@ -34,14 +33,11 @@ def cgroup_limits() -> tuple[float | None, float | None]:
 
 def peak_rss_gib() -> float:
     """Peak resident memory of THIS process image.
-    Linux: VmHWM from /proc/self/status. It starts again at exec, whereas ru_maxrss is inherited by a child from the
-    process that spawned it (a gate that exports in one process and measures in a subprocess would read the exporter's
-    peak). macOS has no /proc: ru_maxrss, which is in bytes there."""
-    try:
-        for line in Path("/proc/self/status").read_text().splitlines():
-            if line.startswith("VmHWM:"):
-                return int(line.split()[1]) * 1024 / GIB             # kB
-    except OSError:
-        pass
+    Linux: VmHWM, which restarts at exec (ru_maxrss is inherited by a child from its parent, so a gate that exports in
+    one process and measures in a subprocess would read the exporter's peak). macOS: ru_maxrss, in bytes there."""
+    status = _read("/proc/self/status")
+    for line in (status or "").splitlines():
+        if line.startswith("VmHWM:"):
+            return int(line.split()[1]) * 1024 / GIB                 # kB
     r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss          # bytes on macOS, KiB on Linux
     return r * (1 if sys.platform == "darwin" else 1024) / GIB

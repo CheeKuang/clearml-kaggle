@@ -1,0 +1,57 @@
+--- a/server.py
++++ b/server.py
+@@ -19,6 +19,7 @@
+ from libs.mask_processor import MaskProcessor
+ from libs.preprocess import preprocess_image
+ from libs.postprocess import postprocess_yolo_masks
++from libs.postprocess_semantic import postprocess_semantic_masks
+ from libs.slice_inference import slice_and_infer
+ 
+ # config
+@@ -89,6 +90,14 @@
+         self.output_names = None
+         self._lock = threading.Lock()
+         self.logger = logging.getLogger(__name__)
++        # semantic models come with a <name>.onnx.json sidecar that holds their threshold (best at TTA "none")
++        self.threshold = None
++        sidecar = model_path + ".json"
++        if os.path.exists(sidecar):
++            with open(sidecar) as f:
++                self.threshold = json.load(f).get("threshold")
++            if self.threshold is None:
++                raise ValueError(f"{sidecar} has no threshold")
+         self._setup_session()
+ 
+     def _setup_session(self):
+@@ -245,15 +254,22 @@
+             if not outputs:
+                 return category, None
+ 
+-            mask = postprocess_yolo_masks(
+-                outputs,
+-                original_shape,
+-                ratio,
+-                pad,
+-                input_size=input_size,
+-                conf_threshold=confidence,
+-                use_bbox_cropping=use_bbox_cropping,
+-            )
++            model = self.models[category]
++            if model.threshold is not None:        # semantic model: its own sidecar threshold, not the YOLO confidence
++                mask = postprocess_semantic_masks(
++                    outputs, original_shape, ratio, pad,
++                    input_size=input_size, conf_threshold=model.threshold,
++                )
++            else:
++                mask = postprocess_yolo_masks(
++                    outputs,
++                    original_shape,
++                    ratio,
++                    pad,
++                    input_size=input_size,
++                    conf_threshold=confidence,
++                    use_bbox_cropping=use_bbox_cropping,
++                )
+             return category, mask
+ 
+         except Exception as e:
