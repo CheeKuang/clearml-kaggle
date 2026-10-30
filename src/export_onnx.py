@@ -12,6 +12,9 @@ Contract of the exported file (matches libs/preprocess.py of the server):
 A sidecar <out>.json carries the class name(s) and the threshold the server should use (best at TTA "none",
 because the server does no test-time augmentation). The server needs the matching post-processing:
 serving/postprocess_semantic.py.
+After training, src.training.train also shrinks the file (shrunk/<class>.onnx, the one for production), writes the
+train Task id, git commit and the sha256 of both files into the sidecar, and checks both through the server's
+pre/post-processing (validate_onnx).
 """
 from __future__ import annotations
 
@@ -83,6 +86,61 @@ def export_model(network: torch.nn.Module, out: Path, names: list[str], size: in
             "architecture": architecture, "opset": opset}
     out.with_suffix(".onnx.json").write_text(json.dumps(side, indent=2))
     return side
+
+
+def shrink_and_record(onnx_path: Path, shrink, source: dict) -> dict[str, Path]:
+    """Shrink `onnx_path` (if enabled) to shrunk/<same name>, then add `source` (task, commit) and the sha256 and size
+    of every file to the sidecar, so a file in production can be traced to its run. Returns {artifact name: path}."""
+    from .shrink import shrink_onnx_weights
+    from .training.metadata import sha256_file
+
+    files = {"onnx": onnx_path}
+    if shrink.enabled:
+        files["onnx_shrunk"] = onnx_path.parent / "shrunk" / onnx_path.name
+        shrink_onnx_weights(str(onnx_path), str(files["onnx_shrunk"]), method=shrink.method, ir_version=shrink.ir_version)
+    side_path = onnx_path.with_suffix(".onnx.json")
+    side = json.loads(side_path.read_text())
+    side["source"] = source
+    side["files"] = {k: {"file": str(p.relative_to(onnx_path.parent)), "sha256": sha256_file(p), "bytes": p.stat().st_size}
+                     for k, p in files.items()}
+    side_path.write_text(json.dumps(side, indent=2))
+    return files
+
+
+def letterbox(img: np.ndarray, size: int) -> tuple[np.ndarray, float, tuple[float, float]]:
+    """The server's libs/preprocess.letterbox (auto=False): fit into size x size, pad 114 on both sides."""
+    import cv2
+
+    h, w = img.shape[:2]
+    r = min(size / h, size / w)
+    nw, nh = int(round(w * r)), int(round(h * r))
+    dw, dh = (size - nw) / 2, (size - nh) / 2
+    if (nw, nh) != (w, h):
+        img = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)), r, (dw, dh)
+
+
+def validate_onnx(files: dict[str, Path], ds, threshold: float, size: int) -> dict[str, float]:
+    """IoU of each single-class ONNX file on `ds`, through the server's path: uint8 tile -> letterbox -> RGB/255 ->
+    onnxruntime CPU -> serving/postprocess_semantic.py -> 0/255 mask. Same tiles and threshold for every file."""
+    import onnxruntime as ort
+
+    from serving.postprocess_semantic import postprocess_semantic_masks
+
+    sessions = {k: ort.InferenceSession(str(p), providers=["CPUExecutionProvider"]) for k, p in files.items()}
+    counts = {k: np.zeros(3) for k in files}                                    # tp, fp, fn
+    for i in range(len(ds)):
+        img = np.rint(ds.image(i).transpose(1, 2, 0) * 255).astype(np.uint8)  # back to the tile the server receives
+        padded, ratio, pad = letterbox(img, size)
+        x = np.ascontiguousarray(padded.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+        y = ds.mask(i)[0] > 0.5
+        for k, sess in sessions.items():
+            p = postprocess_semantic_masks(sess.run(["probs"], {"images": x}), img.shape[:2], ratio, pad, size,
+                                           threshold) > 0
+            counts[k] += [(p & y).sum(), (p & ~y).sum(), (~p & y).sum()]
+    return {f"{k}_iou": float(tp / (tp + fp + fn + 1e-8)) for k, (tp, fp, fn) in counts.items()}
 
 
 def export_untrained(class_name: str, architecture: str, encoder: str, out: Path, size: int = 1280) -> dict:

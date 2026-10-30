@@ -56,7 +56,8 @@ def models_from_pipeline(task, workdir: Path) -> list[Path]:
         if t.status not in ("completed", "published") or "onnx" not in t.artifacts:
             raise SystemExit(f"{t.name} is {t.status} and has artifacts {list(t.artifacts)}: no ONNX model to check")
         cls = t.name[len("train_"):]
-        shutil.copy(t.artifacts["onnx"].get_local_copy(), workdir / f"{cls}.onnx")
+        onnx = "onnx_shrunk" if "onnx_shrunk" in t.artifacts else "onnx"        # the file production will get
+        shutil.copy(t.artifacts[onnx].get_local_copy(), workdir / f"{cls}.onnx")
         shutil.copy(t.artifacts["onnx_meta"].get_local_copy(), workdir / f"{cls}.onnx.json")
         files.append(workdir / f"{cls}.onnx")
     if not files:

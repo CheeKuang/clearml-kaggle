@@ -1,11 +1,27 @@
-"""Container and process facts for the serving gate (no torch import, safe everywhere)."""
+"""Container, process and git facts for the gates and the run records (no torch import, safe everywhere)."""
 from __future__ import annotations
 
 import resource
+import subprocess
 import sys
 from pathlib import Path
 
 GIB = 1024 ** 3
+REPO = Path(__file__).resolve().parents[2]
+
+
+def git_state(repo: Path = REPO) -> dict:
+    """commit, `git status --porcelain` lines, and the files git does not know under src/ and conf/.
+    ClearML records the commit and the diff of TRACKED files only: an untracked module does not exist on an agent."""
+    def git(*args) -> str | None:
+        try:
+            return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=True).stdout
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    status = (git("status", "--porcelain", "--untracked-files=all") or "").splitlines()
+    return {"commit": (git("rev-parse", "HEAD") or "").strip() or None, "status": status,
+            "untracked": [s[3:] for s in status if s.startswith("?? ") and s[3:].startswith(("src/", "conf/"))]}
 
 
 def _read(path: str) -> str | None:

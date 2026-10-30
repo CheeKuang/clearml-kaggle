@@ -22,6 +22,12 @@ train:
   num_workers: 4
   amp: true
   patience: 8
+  deterministic: true         # Lightning "warn": deterministic kernels where torch has them, a warning where it does not
+
+augment:                      # training split only; image and mask get the same transform (src/data/tiles.py)
+  hflip: 0.5                  # probability of a horizontal flip
+  vflip: 0.5                  # probability of a vertical flip
+  rot90: true                 # rotate by 0, 90, 180 or 270 degrees at random
 
 optimizer:
   name: AdamW
@@ -39,6 +45,13 @@ export:
   onnx:
     enabled: true             # after training: <class>.onnx + .onnx.json for the Chisel server (src/export_onnx.py)
     size: 1280                # the server's input size
+    shrink:                   # int8 weight storage with src/shrink.py (copied from chisel-pipeline-convert), ~4x smaller
+      enabled: true           # writes onnx/shrunk/<class>.onnx: the file that goes to production
+      method: integer_weights # integer_weights | float_weights
+      ir_version: 8           # as in chisel-pipeline-convert's notebook
+    validate:                 # IoU of the exported files through the server's pre/post-processing (onnxruntime CPU)
+      enabled: true
+      tiles: 32               # tiles of the sweep split, same tiles for the full and the shrunk model
 
 finalize:
   metadata_file: metadata.json
@@ -67,6 +80,9 @@ clearml:                      # everything under here is about ClearML, not abou
     - loss.bce_weight
     - train.batch_size
     - train.epochs
+    - augment.hflip
+    - augment.vflip
+    - augment.rot90
     - data.root
     - data.clearml_dataset_id
     - preflight.enabled

@@ -45,7 +45,8 @@ class TileDataset(Dataset):
         if limit and len(self.imgs) > limit:
             pick = np.random.default_rng(seed).choice(len(self.imgs), limit, replace=False)
             self.imgs = [self.imgs[i] for i in sorted(pick)]
-        self.mask_dir, self.c, self.augment = root / split / "masks", cfg.data, augment
+        self.mask_dir, self.c = root / split / "masks", cfg.data
+        self.augment = cfg.augment if augment else None
         self.class_names = class_names(self.c)
         if self.c.get("classes"):
             self._check_class_ids()
@@ -83,11 +84,12 @@ class TileDataset(Dataset):
 
     def __getitem__(self, i):
         x, y = torch.from_numpy(self.image(i)), torch.from_numpy(self.mask(i))
-        if self.augment:                        # random flips + 90-degree rotation, the same for image and mask
-            if torch.rand(1) < 0.5:
+        if a := self.augment:                   # conf `augment`: random flips + 90-degree rotation, same for image and mask
+            if torch.rand(1) < a.hflip:
                 x, y = x.flip(-1), y.flip(-1)
-            if torch.rand(1) < 0.5:
+            if torch.rand(1) < a.vflip:
                 x, y = x.flip(-2), y.flip(-2)
-            k = int(torch.randint(0, 4, (1,)))
-            x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
+            if a.rot90:
+                k = int(torch.randint(0, 4, (1,)))
+                x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
         return x, y

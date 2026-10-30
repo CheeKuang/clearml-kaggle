@@ -21,6 +21,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 from ..data.tiles import class_names
+from .envinfo import git_state
 
 try:
     from clearml import Task
@@ -29,7 +30,7 @@ except ImportError:  # runs without clearml installed
 
 # Imported lazily (Hydra _target_ strings, inside functions), so ClearML's static analysis misses them.
 FORCED_REQUIREMENTS = ["lightning", "pandas", "segmentation_models_pytorch", "torchgeo", "hydra-core", "omegaconf",
-                       "rasterio", "scikit-learn", "scipy", "onnxruntime", "opencv-python-headless"]
+                       "rasterio", "scikit-learn", "scipy", "onnxruntime", "opencv-python-headless", "onnx-graphsurgeon"]
 
 
 class Reporter:
@@ -55,6 +56,23 @@ class Reporter:
     def table(self, title: str, series: str, df, iteration: int = 0):
         if self.logger:
             self.logger.report_table(title, series, iteration=iteration, table_plot=df)
+
+    def params(self, section: str, values: dict):
+        """Write `values` as their own section of the Hyperparameters tab. Display only: nothing reads them back
+        (edit "Overrides" to change a run)."""
+        if self.task:
+            self.task.update_parameters({f"{section}/{k}": _fmt(v) for k, v in values.items()})
+
+
+def flatten(d: dict, prefix: str = "") -> dict:
+    """{"a": {"b": 1}} -> {"a.b": 1}"""
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, dict) and v:
+            out.update(flatten(v, f"{prefix}{k}."))
+        else:
+            out[f"{prefix}{k}"] = v
+    return out
 
 
 def fail_gate(task, reason: str, message: str):
@@ -93,6 +111,9 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     if not cfg.clearml.enabled or Task is None:
         return None, cfg
     c, hc = cfg.clearml, HydraConfig.get()
+    if untracked := git_state()["untracked"]:
+        print(f"[clearml] WARNING: {len(untracked)} file(s) under src/ or conf/ are not in git, so a remote run of this "
+              f"Task will not have them (commit and push first): {untracked[:10]}", flush=True)
 
     # Before Task.init. The agent installs exactly the versions recorded here, so an offline image must match them.
     for pkg in FORCED_REQUIREMENTS:
@@ -116,6 +137,9 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
 
     task.connect_configuration(OmegaConf.to_container(cfg, resolve=True), name="resolved_config",
                                description="Final Hydra config after overrides", ignore_remote_overrides=True)
+    # the same final config, one field per value: columns in the experiments table, side by side in Compare
+    Reporter(task).params("Resolved", {k: v for k, v in flatten(OmegaConf.to_container(cfg, resolve=True)).items()
+                                       if not k.startswith("clearml.")})
     task.connect_label_enumeration({"background": 0, **{n: i + 1 for i, n in enumerate(class_names(cfg.data))}})
     task.add_tags([str(cfg.model.arch), str(cfg.model.encoder_name), str(cfg.pretrain.source)])
 

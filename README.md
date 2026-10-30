@@ -18,8 +18,8 @@ flowchart TD
     D --> T["train_building / train_road /<br/>train_water / train_vegetation"]
     E --> T
     T --> F["serve_gate_post<br/>the real ONNX models fit?"]
-    T --> G["per class: best.ckpt, metadata.json,<br/>&lt;class&gt;.onnx + &lt;class&gt;.onnx.json"]
-    G -->|"optional: src.shrink (4x smaller)"| H["Chisel server copy<br/>+ serving/chisel_server.patch"]
+    T --> G["per class: best.ckpt, metadata.json, &lt;class&gt;.onnx,<br/>shrunk/&lt;class&gt;.onnx (4x smaller) + &lt;class&gt;.onnx.json"]
+    G -->|"shrunk/&lt;class&gt;.onnx + .onnx.json"| H["Chisel server copy<br/>+ serving/chisel_server.patch"]
 ```
 
 - Every box after the pipeline is a **ClearML task** that a GPU agent runs (here: a Kaggle notebook,
@@ -33,7 +33,8 @@ flowchart TD
 ```
 Hydra composes conf/  ->  init_clearml (Task, editable "Overrides", recompose)  ->  dataset (ClearML or local folder)
   ->  preflight gate (skipped in the pipeline: domain_check already ran)  ->  Lightning training (best by val/iou)
-  ->  sweep: every TTA x threshold on val  ->  metadata.json  ->  ONNX export + sidecar (threshold at TTA "none")
+  ->  sweep: every TTA x threshold on val  ->  ONNX export + sidecar (threshold at TTA "none")  ->  shrunk ONNX
+  (src/shrink.py, the production file)  ->  IoU of both through the server's path  ->  metadata.json
   ->  upload artifacts
 ```
 

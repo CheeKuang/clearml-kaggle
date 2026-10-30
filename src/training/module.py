@@ -61,6 +61,7 @@ class SegModule(L.LightningModule):
         x, y = batch
         loss = self.loss(self(x), y)
         self.log("train/loss", loss, on_step=False, on_epoch=True)
+        self.log("train/lr", self.optimizers().param_groups[0]["lr"], on_step=False, on_epoch=True)  # cosine schedule
         return loss
 
     def on_validation_epoch_start(self):

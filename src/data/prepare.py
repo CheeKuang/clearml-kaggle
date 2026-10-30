@@ -9,6 +9,7 @@
   -> <out>/{train,val}/images/*.png        copied
      <out>/{train,val}/masks/*.png         labels: the ids unchanged (conf/data/*.yaml maps ids to classes)
                                            binary: 0 = not building, 255 = building (conf/data/buildings.yaml)
+     <out>/split.json                      how the split was made (seed, val_frac, ...), logged by every train Task
 
 The split is random per tile (seeded): neighbouring tiles of one scene can land on both sides, so val IoU can be
 optimistic. Split by scene/city if you have that information.
@@ -16,6 +17,7 @@ optimistic. Split by scene/city if you have that information.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 
@@ -63,6 +65,11 @@ def main():
             print(f"{split}: {len(r)} tiles; mean pixel share per id 0..7: " + " ".join(f"{x:.3f}" for x in r.mean(0)))
         else:
             print(f"{split}: {len(r)} tiles, mean building ratio {r.mean():.3f}, without buildings {int((r == 0).sum())}")
+    # how the split was made; uploaded with the data, so the ClearML Dataset carries it and every train Task logs it
+    (out / "split.json").write_text(json.dumps({
+        "method": "random per tile", "src": str(src), "mode": a.mode, "val_frac": a.val_frac, "seed": a.seed,
+        **({"building_class": a.building_class} if a.mode == "binary" else {}),
+        "tiles": {s: len(r) for s, r in ratios.items()}}, indent=2))
     print(f"written to {out}")
 
 

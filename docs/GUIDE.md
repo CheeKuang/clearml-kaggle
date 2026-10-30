@@ -63,8 +63,8 @@ The whole project is one flow, from raw images to models running in the server. 
                                          |
  STAGE 4  EXPORT                  (src/export_onnx.py, src/shrink.py)   runs at the end of every train task
  ---------------------------------------------------------------------------------------------------------
-   per class: best.ckpt, metadata.json, <class>.onnx  +  <class>.onnx.json (the threshold for the server)
-   optional:  python -m src.shrink  ->  the same model, weights stored as int8, about 4x smaller file
+   per class: best.ckpt, metadata.json, <class>.onnx  +  <class>.onnx.json (threshold, task id, sha256 of the files)
+   shrunk/<class>.onnx: the same model, weights stored as int8, about 4x smaller: the file for production
                                          |
  STAGE 5  SERVING                 (serving/)             runs in: a COPY of the Chisel server
  ---------------------------------------------------------------------------------------------------------
@@ -506,14 +506,16 @@ python -m src.training.train data=road ...
    |
    1  Hydra reads conf/config.yaml + the chosen groups (data=road, architecture=unet, ...) + your overrides -> cfg
    2  init_clearml(cfg)            Task.init, publish "Overrides", apply remote overrides, store the resolved config
-   3  seed_everything             same seed -> repeatable
+   3  seed_everything             same seed -> repeatable (train.deterministic: deterministic kernels too)
    4  resolve_root(cfg)           the ClearML Dataset (downloaded to a cache) or the local folder data.root
    5  preflight (if enabled)      domain shift + label balance; a failed `gate` -> task failed, exit code 2
-   6  Lightning training          SegModule on TileDataset; keep the best checkpoint by val/iou; early stopping
-   7  load the best checkpoint
-   8  sweep (if enabled)          every TTA x threshold on val -> best pair; metadata.json
-   9  ONNX export (if enabled)    <class>.onnx + .onnx.json (threshold at TTA "none")
-  10  upload artifacts; publish the task (read-only)
+   6  fingerprints                sha256 of every data file, split.json, sha256 of the starting weights -> "Run"
+   7  Lightning training          SegModule on TileDataset; keep the best checkpoint by val/iou; early stopping
+   8  load the best checkpoint
+   9  sweep (if enabled)          every TTA x threshold on val -> best pair
+  10  ONNX export (if enabled)    <class>.onnx + .onnx.json (threshold at TTA "none"), then shrunk/<class>.onnx
+                                  (the production file), both checked through the server's pre/post-processing
+  11  metadata.json; upload artifacts; publish the task (read-only)
 ```
 
 The pieces behind each step:
@@ -521,7 +523,8 @@ The pieces behind each step:
 - **Data** (`src/data/tiles.py`). `TileDataset` reads an image (rasterio), scales it `/ 255`, and builds the mask as
   **one binary channel per class**: a pixel is 1 where the mask value is in that class's id list
   (`np.isin(mask, ids)`). With `data=road` the mask is `(1, H, W)`; with `data=loveda` it is `(4, H, W)`.
-  Training augmentation is random flips and 90-degree rotations, applied to image and mask together.
+  Training augmentation is random flips and 90-degree rotations, applied to image and mask together; the
+  probabilities are in `augment` (conf/config.yaml).
 - **Model** (`src/model_factory.py`, `src/training/module.py`). The network is built from the YAML in
   `conf/architecture/` and `conf/encoder/` by `segmentation_models_pytorch` (Unet, FPN, DeepLabV3+; ResNet
   encoders). Its output has `model.classes` channels, computed from the class list (`${len:${data.classes}}`).
@@ -533,7 +536,26 @@ The pieces behind each step:
   threshold from 0.30 to 0.70, records IoU/F1 per class, and picks the best row. This is how a threshold per class
   is chosen.
 - **Metadata** (`src/training/metadata.py`). `metadata.json` freezes the run: resolved config, package versions, GPU, checkpoint
-  hash, the sweep table, the best TTA and threshold (also per class).
+  hash, the sweep table, the best TTA and threshold (also per class), git status, the hash of every data file,
+  `split.json`, the hashes of the starting weights and of both ONNX files.
+
+**What a train Task records, and where to see it in the ClearML UI** (enough to rerun it: clone the Task and enqueue):
+
+| Tab | What |
+|---|---|
+| Execution | git repo, commit, uncommitted diff, installed packages |
+| Hyperparameters -> Overrides | the editable keys (`clearml.tunable`); the only section a clone reads back |
+| Hyperparameters -> Resolved | every final setting, one field each (epochs, lr, loss weights, augment, seed, ...). Display only |
+| Hyperparameters -> Run | tiles and sha256 per split, `split.*` (from `split.json`), steps per epoch, parameters, sha256 of the starting encoder / model weights, scheduler, device, GPU, precision, sha256 of `onnx` and `onnx_shrunk`. Display only |
+| Scalars | `train/loss`, `train/lr`, `val/loss`, `val/iou`, `val/f1` per epoch; sweep IoU; single values `best_val_iou`, `sweep_best_*`, `onnx_iou`, `onnx_shrunk_iou`, `onnx_shrunk_iou_drop` |
+| Plots, Debug samples | sweep table; validation prediction (red) vs ground truth (green) |
+| Artifacts | `resolved_config`, `hydra_snapshot`, `best_checkpoint`, `metadata`, `onnx`, `onnx_shrunk`, `onnx_meta` |
+
+A file in production traces back through its `.onnx.json`: `source.task_id` is the train Task, `files.onnx_shrunk.sha256`
+must equal the sha256 of the deployed file. Verified on the Mac: two runs with the same settings gave bit-identical
+weights and ONNX files; on a GPU some kernels have no deterministic version (a warning is printed), so expect
+near-identical rather than bit-identical results there. Datasets made before `split.json` existed show
+`split = not recorded`; their per-split sha256 still pins the exact files.
 
 > **Why a sweep instead of a fixed 0.5?** Models are rarely best at 0.5, and the optimum differs per class (the
 > server also uses a different confidence per class). Doing it once after training makes the choice evidence-based.
