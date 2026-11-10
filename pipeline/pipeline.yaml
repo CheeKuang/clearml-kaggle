@@ -11,7 +11,7 @@
 # named below, (3) data.clearml_dataset_id is the multi-class dataset (python -m src.data.upload ... --name loveda-multi).
 # serve_gate only means something on an agent that enforces the production limits (4 request / 8 limit vCPU, 8 GiB).
 name: gated-training-per-class
-project: building-segmentation
+project: chisel-segmentation
 version: "2.0.0"
 controller_queue: services      # queue served by an agent that runs the pipeline controller itself (or use --local)
 

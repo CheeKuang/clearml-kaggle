@@ -1,4 +1,4 @@
-# Beginner handbook: the building-segmentation pipeline (ClearML + Hydra + Kaggle)
+# Beginner handbook: the chisel-segmentation pipeline (ClearML + Hydra + Kaggle)
 
 This handbook is for someone who has never used ClearML. It explains **what the project does, why it is built
 this way, how to run every part step by step, and how the code flows**. Read Part 1 first; use Parts 2 to 4
@@ -105,7 +105,7 @@ In words:
 | ClearML word | Plain meaning | In this project |
 |---|---|---|
 | **Server** | The website and database that store everything | Hosted: https://app.clear.ml (free account) |
-| **Project** | A folder of tasks | `building-segmentation` |
+| **Project** | A folder of tasks | `chisel-segmentation` |
 | **Task** | One recorded run of a script: code version, settings, logs, metrics, files | One run of `src.training.train`, `src.gates.domain_check`, ... |
 | **Hyperparameters** | Settings stored on a task; editable in the UI before a re-run | The `Overrides` section (section 3.2) |
 | **Artifact** | A file attached to a task | `best_checkpoint`, `metadata`, `onnx`, `onnx_meta` |
@@ -134,7 +134,7 @@ loss, epochs, gate limits). Code never hard-codes a setting; it reads `cfg.<key>
 | File / folder | Holds |
 |---|---|
 | `config.yaml` | the defaults, training / sweep / export settings, and `clearml.tunable`: the keys ClearML may change remotely |
-| `data/` | which LoveDA mask ids form each class: `building`, `road`, `water`, `vegetation` (one model each), `loveda` (all four in one model), `buildings` (legacy binary masks) |
+| `data/` | which LoveDA mask ids form each class: `building`, `road`, `water`, `vegetation` (one model each), `loveda` (all four in one model), `buildings` (legacy binary masks); `oem_building`, `oem_road`, `oem_water`, `oem_vegetation`, `oem` do the same for OpenEarthMap ids (`src/data/prepare_oem.py`) |
 | `architecture/`, `encoder/` | the network (Unet, FPN, DeepLabV3+) and its encoder and pretrained weights |
 | `loss/`, `preflight/`, `serve/` | loss weights; the data-gate limits; the serving-gate limits (the production container) |
 
@@ -382,7 +382,7 @@ four classes in one model; that is **not** the production shape, but the same co
 ## 2.4 Base tasks: the templates every remote run copies
 
 Agents and pipelines never run your laptop's process. They **clone a base task**. Three are used, in project
-`building-segmentation`:
+`chisel-segmentation`:
 
 | Name | Registered by running (no arguments!) | Used for |
 |---|---|---|
@@ -405,7 +405,7 @@ task's own status does not matter, only that it exists.
    disabled the sweep in later runs. Check: `Task.get_task(...).get_parameters().get("Args/overrides")` should be
    `None` or `['hydra.mode=RUN']`; remove a stale one with `task.delete_parameter("Args/overrides")`.
 4. `Task.set_parameters(...)` **replaces all parameters**; use `update_parameters(...)` to change a few.
-5. Find a task by exact name: `Task.get_task(project_name="building-segmentation", task_name="serve-gate")`.
+5. Find a task by exact name: `Task.get_task(project_name="chisel-segmentation", task_name="serve-gate")`.
 
 > **Why this indirection?** It is what makes a run reproducible and remotely executable, and what lets a
 > pipeline or an HPO job create hundreds of runs from one template.
@@ -438,7 +438,7 @@ tasks are slower (about 3 to 6 extra minutes).
 
 ```python
 from clearml import Task
-base = Task.get_task(project_name="building-segmentation", task_name="Unet-resnet34")
+base = Task.get_task(project_name="chisel-segmentation", task_name="Unet-resnet34")
 t = Task.clone(source_task=base, name="road-test", parent=base.id)
 t.update_parameters({
     "Overrides/data": "road",                                   # which class (conf/data/road.yaml)
@@ -899,7 +899,7 @@ in `conf/data/<class>.yaml` (1 for a per-class model, 4 for `data=loveda`), and 
 
 ## 6.2 ClearML <-> Hydra: how a run gets its settings (`init_clearml`)
 
-`src/common/clearml_utils.py`, lines 91 to 124:
+`src/common/clearml_utils.py`, lines 111 to 152:
 
 ```python
 def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
@@ -907,6 +907,9 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
     if not cfg.clearml.enabled or Task is None:
         return None, cfg
     c, hc = cfg.clearml, HydraConfig.get()
+    if untracked := git_state()["untracked"]:
+        print(f"[clearml] WARNING: {len(untracked)} file(s) under src/ or conf/ are not in git, so a remote run of this "
+              f"Task will not have them (commit and push first): {untracked[:10]}", flush=True)
 
     # Before Task.init. The agent installs exactly the versions recorded here, so an offline image must match them.
     for pkg in FORCED_REQUIREMENTS:
@@ -920,16 +923,21 @@ def init_clearml(cfg: DictConfig) -> tuple[Any | None, DictConfig]:
                      tags=list(c.tags), reuse_last_task_id=False, output_uri=c.output_uri,
                      auto_connect_frameworks={"hydra": False})            # Hydra is handled below (one authority)
 
-    choices = hc.runtime.choices                                           # config groups use the chosen option name
+    choices = hc.runtime.choices                                          # config groups use the chosen option name
     state = {k: _fmt(choices[k] if k in choices else OmegaConf.select(cfg, k)) for k in c.tunable}
     original = dict(state)
     tunables = {k: _fmt(v) for k, v in task.connect(state, name="Overrides").items()}
-    if tunables != original:
-        cfg = recompose(hc, tunables)
-        print(f"[clearml] config recomposed with remote overrides: {tunables}")
+    # Only the values the clone CHANGED: a clone inherits the base task's value of every key, so re-applying an
+    # unchanged loss.bce_weight=0.5 after loss=road would override road.yaml's own weight.
+    if changed := {k: v for k, v in tunables.items() if v != original.get(k)}:
+        cfg = recompose(hc, changed)
+        print(f"[clearml] config recomposed with remote overrides: {changed}")
 
     task.connect_configuration(OmegaConf.to_container(cfg, resolve=True), name="resolved_config",
                                description="Final Hydra config after overrides", ignore_remote_overrides=True)
+    # the same final config, one field per value: columns in the experiments table, side by side in Compare
+    Reporter(task).params("Resolved", {k: v for k, v in flatten(OmegaConf.to_container(cfg, resolve=True)).items()
+                                       if not k.startswith("clearml.")})
     task.connect_label_enumeration({"background": 0, **{n: i + 1 for i, n in enumerate(class_names(cfg.data))}})
     task.add_tags([str(cfg.model.arch), str(cfg.model.encoder_name), str(cfg.pretrain.source)])
 
@@ -959,7 +967,7 @@ Every task script calls this first. Step by step:
 
 ## 6.3 Turning ClearML values back into Hydra overrides (`_fmt`, `_quote`, `recompose`)
 
-`src/common/clearml_utils.py`, lines 68 to 74:
+`src/common/clearml_utils.py`, lines 88 to 94:
 
 ```python
 def _fmt(v: Any) -> str:
@@ -971,7 +979,7 @@ def _fmt(v: Any) -> str:
     return str(v)
 ```
 
-`src/common/clearml_utils.py`, lines 77 to 81:
+`src/common/clearml_utils.py`, lines 97 to 101:
 
 ```python
 def _quote(text: str) -> str:
@@ -981,7 +989,7 @@ def _quote(text: str) -> str:
     return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
 ```
 
-`src/common/clearml_utils.py`, lines 84 to 88:
+`src/common/clearml_utils.py`, lines 104 to 108:
 
 ```python
 def recompose(hc: HydraConfig, tunables: dict[str, Any]) -> DictConfig:
@@ -1002,7 +1010,7 @@ def recompose(hc: HydraConfig, tunables: dict[str, Any]) -> DictConfig:
 
 ## 6.4 Failing a gate (`fail_gate`)
 
-`src/common/clearml_utils.py`, lines 60 to 65:
+`src/common/clearml_utils.py`, lines 80 to 85:
 
 ```python
 def fail_gate(task, reason: str, message: str):
@@ -1033,7 +1041,7 @@ def resolve_root(cfg) -> Path:
     return Path(cfg.data.root)
 ```
 
-`src/data/tiles.py`, lines 67 to 71:
+`src/data/tiles.py`, lines 68 to 72:
 
 ```python
     def image(self, i) -> np.ndarray:
@@ -1043,7 +1051,7 @@ def resolve_root(cfg) -> Path:
         return x
 ```
 
-`src/data/tiles.py`, lines 73 to 78:
+`src/data/tiles.py`, lines 74 to 79:
 
 ```python
     def mask(self, i) -> np.ndarray:
@@ -1054,18 +1062,19 @@ def resolve_root(cfg) -> Path:
         return (m > 0)[None].astype(np.float32)
 ```
 
-`src/data/tiles.py`, lines 84 to 93:
+`src/data/tiles.py`, lines 85 to 95:
 
 ```python
     def __getitem__(self, i):
         x, y = torch.from_numpy(self.image(i)), torch.from_numpy(self.mask(i))
-        if self.augment:                        # random flips + 90-degree rotation, the same for image and mask
-            if torch.rand(1) < 0.5:
+        if a := self.augment:                   # conf `augment`: random flips + 90-degree rotation, same for image and mask
+            if torch.rand(1) < a.hflip:
                 x, y = x.flip(-1), y.flip(-1)
-            if torch.rand(1) < 0.5:
+            if torch.rand(1) < a.vflip:
                 x, y = x.flip(-2), y.flip(-2)
-            k = int(torch.randint(0, 4, (1,)))
-            x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
+            if a.rot90:
+                k = int(torch.randint(0, 4, (1,)))
+                x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
         return x, y
 ```
 
@@ -1081,7 +1090,7 @@ def resolve_root(cfg) -> Path:
 
 ## 6.6 One training run, top to bottom (`src/training/train.py`)
 
-`src/training/train.py`, lines 36 to 86:
+`src/training/train.py`, lines 73 to 133:
 
 ```python
 @hydra.main(config_path="../../conf", config_name="config", version_base="1.3")
@@ -1095,6 +1104,8 @@ def main(cfg: DictConfig):
 
     root = resolve_root(cfg)
     preflight = gate_preflight(cfg, task, reporter, root, out_dir) if cfg.preflight.enabled else {}
+    data = data_fingerprint(root, cfg.data.splits.values())                  # which exact files (per-file in metadata)
+    split = json.loads((root / "split.json").read_text()) if (root / "split.json").exists() else None
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"          # AMP only on CUDA (Mac MPS runs fp32)
     kw = dict(batch_size=cfg.train.batch_size, num_workers=cfg.train.num_workers, pin_memory=dev == "cuda")
@@ -1102,35 +1113,43 @@ def main(cfg: DictConfig):
     val_dl = DataLoader(TileDataset(root, cfg.data.splits.val, cfg), **kw)
 
     module = SegModule(cfg)
+    precision = "16-mixed" if cfg.train.amp and dev == "cuda" else 32
     ckpt = ModelCheckpoint(dirpath=out_dir / "checkpoints", filename="best", monitor="val/iou", mode="max", save_top_k=1)
-    L.Trainer(max_epochs=cfg.train.epochs, accelerator="auto", devices=1,
-              precision="16-mixed" if cfg.train.amp and dev == "cuda" else 32,
-              logger=ClearMLLogger(task) if task else False,
-              callbacks=[ckpt, EarlyStopping("val/iou", mode="max", patience=cfg.train.patience)],
-              default_root_dir=out_dir, enable_progress_bar=False, num_sanity_val_steps=0).fit(module, train_dl, val_dl)
+    trainer = L.Trainer(max_epochs=cfg.train.epochs, accelerator="auto", devices=1, precision=precision,
+                        deterministic="warn" if cfg.train.deterministic else None,
+                        logger=ClearMLLogger(task) if task else False,
+                        callbacks=[ckpt, EarlyStopping("val/iou", mode="max", patience=cfg.train.patience)],
+                        default_root_dir=out_dir, enable_progress_bar=False, num_sanity_val_steps=0)
+    run = {**{f"{s}_tiles": d["tiles"] for s, d in data.items()}, **{f"{s}_sha256": d["sha256"] for s, d in data.items()},
+           **({f"split.{k}": v for k, v in flatten(split).items()} if split else
+              {"split": "not recorded (dataset made before split.json); see the per-split sha256"}),
+           "steps_per_epoch": len(train_dl), "model_params": sum(p.numel() for p in module.parameters()),
+           "encoder_init_sha256": sha256_state(module.model.encoder.state_dict()),     # the pretrained starting point
+           "model_init_sha256": sha256_state(module.model.state_dict()),
+           "scheduler": f"CosineAnnealingLR(T_max={cfg.train.epochs})",
+           "device": str(trainer.strategy.root_device), "precision": str(precision),
+           "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
+    reporter.params("Run", run)
+    print(f"[run] {json.dumps(run)}", flush=True)
+    trainer.fit(module, train_dl, val_dl)
     module.load_state_dict(torch.load(ckpt.best_model_path, map_location="cpu", weights_only=False)["state_dict"])
     reporter.single("best_val_iou", module.best_iou)
 
-    # sweep -> metadata.json. Without the sweep, best_checkpoint/metadata are not uploaded (ClearML still keeps the Model).
-    df = None
+    df = best = None
     if cfg.sweep.enabled:
         sweep_dl = DataLoader(TileDataset(root, cfg.data.splits[cfg.sweep.split], cfg),
                               batch_size=cfg.train.batch_size, num_workers=cfg.train.num_workers)
         df, best = run_sweep(module, sweep_dl, cfg, dev)
         report_sweep(reporter, df, best, cfg.sweep.metric)
-        meta_path = out_dir / cfg.finalize.metadata_file
-        write_metadata(meta_path, cfg, task, ckpt.best_model_path, module, preflight, df, best)
-        upload(task, best_checkpoint=ckpt.best_model_path, metadata=meta_path)
 
-    # ONNX for the Chisel server: RGB/255 in, sigmoid probabilities out, threshold = best at TTA "none"
-    if cfg.export.onnx.enabled:
-        names = class_names(cfg.data)
-        single = len(names) == 1
-        thr = threshold_from_rows(df.to_dict("records"), cfg.sweep.metric, names[0]) if df is not None and single else None
-        onnx_path = out_dir / "onnx" / f"{names[0] if single else 'model'}.onnx"
-        export_model(module.model, onnx_path, names, cfg.export.onnx.size, threshold=thr,
-                     architecture=f"{cfg.model.arch}/{cfg.model.encoder_name}")
-        upload(task, onnx=onnx_path, onnx_meta=onnx_path.with_suffix(".onnx.json"))
+    onnx_files = export_for_server(cfg, task, reporter, module, df, root, out_dir) if cfg.export.onnx.enabled else {}
+
+    # metadata.json needs the sweep. Without it, best_checkpoint/metadata are not uploaded (ClearML still keeps the Model).
+    if df is not None:
+        meta_path = out_dir / cfg.finalize.metadata_file
+        write_metadata(meta_path, cfg, task, ckpt.best_model_path, module, preflight, df, best,
+                       run=run, data=data, split=split, onnx=onnx_files)
+        upload(task, best_checkpoint=ckpt.best_model_path, metadata=meta_path)
 
     # Pipeline steps have been seen to end as "completed" rather than "published"; cause not investigated.
     if task and cfg.finalize.publish_on_completion:
@@ -1152,15 +1171,16 @@ Read it as the list in section 3.1:
 
 ## 6.7 Loss and metrics (`src/training/module.py`)
 
-`src/training/module.py`, lines 14 to 16:
+`src/training/module.py`, lines 15 to 18:
 
 ```python
 def confusion(pred, y, dims) -> torch.Tensor:
     """tp, fp, fn summed over `dims`, stacked on a new last axis."""
-    return torch.stack([(pred * y).sum(dims), (pred * (1 - y)).sum(dims), ((1 - pred) * y).sum(dims)], -1)
+    tp, fp, fn = pred * y, pred * (1 - y), (1 - pred) * y
+    return torch.stack([tp.sum(dims), fp.sum(dims), fn.sum(dims)], -1)
 ```
 
-`src/training/module.py`, lines 19 to 21:
+`src/training/module.py`, lines 21 to 23:
 
 ```python
 def iou_f1(counts):
@@ -1168,38 +1188,38 @@ def iou_f1(counts):
     return tp / (tp + fp + fn + 1e-8), 2 * tp / (2 * tp + fp + fn + 1e-8)
 ```
 
-`src/training/module.py`, lines 45 to 51:
+`src/training/module.py`, lines 50 to 58:
 
 ```python
     def loss(self, logits, y):
         c = self.cfg.loss
-        pw = None if c.pos_weight is None else torch.as_tensor(c.pos_weight, dtype=torch.float32, device=logits.device)
-        if pw is not None and pw.ndim == 1:     # one pos_weight per class
-            pw = pw.view(-1, 1, 1)
-        bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, y, pos_weight=pw)
+        pos_weight = None
+        if c.pos_weight is not None:            # one number, or one per class (broadcast over H, W)
+            pos_weight = torch.as_tensor(c.pos_weight, dtype=torch.float32, device=logits.device)
+            if pos_weight.ndim == 1:
+                pos_weight = pos_weight.view(-1, 1, 1)
+        bce = F.binary_cross_entropy_with_logits(logits, y, pos_weight=pos_weight)
         return c.bce_weight * bce + c.dice_weight * self.dice(logits, y)
 ```
 
-`src/training/module.py`, lines 72 to 89:
+`src/training/module.py`, lines 79 to 94:
 
 ```python
     def on_validation_epoch_end(self):
-        iou_c, f1_c = iou_f1(self._counts)
-        iou = iou_c.mean()
-        self.log("val/iou", iou)
-        self.log("val/f1", f1_c.mean())
+        iou, f1 = iou_f1(self._counts)          # one value per class
+        metrics = {"val/iou": iou.mean(), "val/f1": f1.mean()}
         if len(self.names) > 1:
-            for n, i, f in zip(self.names, iou_c, f1_c):
-                self.log(f"val/iou_{n}", i)
-                self.log(f"val/f1_{n}", f)
+            metrics |= {f"val/iou_{n}": v for n, v in zip(self.names, iou)}
+            metrics |= {f"val/f1_{n}": v for n, v in zip(self.names, f1)}
+        self.log_dict(metrics)
         if self.trainer.sanity_checking:
             return
-        if iou.item() > self.best_iou:
-            self.best_iou, self.best_epoch = iou.item(), self.current_epoch
+        if metrics["val/iou"].item() > self.best_iou:
+            self.best_iou, self.best_epoch = metrics["val/iou"].item(), self.current_epoch
         if isinstance(self.logger, ClearMLLogger):
             x, y, p = self._sample
-            for c, n in enumerate(self.names):
-                self.logger.report_image(f"val/samples_{n}", "pred(red) vs gt(green)",
+            for c, name in enumerate(self.names):
+                self.logger.report_image(f"val/samples_{name}", "pred(red) vs gt(green)",
                                          overlay(x, y[c:c + 1], p[c:c + 1]), self.current_epoch)
 ```
 
@@ -1256,26 +1276,28 @@ value sits at the edge of the range (road: 0.70), widen `sweep.thresholds`.
 
 ## 6.9 The data gate (`src/gates/preflight.py`)
 
-`src/gates/preflight.py`, lines 20 to 33:
+`src/gates/preflight.py`, lines 21 to 36:
 
 ```python
 def knn_interleaving(fa: np.ndarray, fb: np.ndarray, k: int) -> dict:
     """How often a sample's k nearest neighbours come from the OTHER split, vs. what a perfect mix would give.
     shift_score: 0 = interleaved, 1 = fully separated."""
-    X = np.vstack([fa, fb])
-    X = (X - X.mean(0)) / (X.std(0) + 1e-8)
-    dom = np.r_[np.zeros(len(fa), int), np.ones(len(fb), int)]
+    X = StandardScaler().fit_transform(np.vstack([fa, fb]))
+    split = np.r_[np.zeros(len(fa), int), np.ones(len(fb), int)]          # 0 = reference, 1 = candidate
     k = min(k, len(X) - 1)
-    idx = NearestNeighbors(n_neighbors=k + 1).fit(X).kneighbors(X, return_distance=False)[:, 1:]
-    other = (dom[idx] != dom[:, None]).mean(1)
-    expected = np.where(dom == 0, len(fb), len(fa)) / (len(X) - 1)
-    shift = lambda m: float(np.clip(1 - other[m].mean() / expected[m].mean(), 0, 1))   # noqa: E731
+    neighbours = NearestNeighbors(n_neighbors=k + 1).fit(X).kneighbors(X, return_distance=False)[:, 1:]  # drop itself
+    other = (split[neighbours] != split[:, None]).mean(1)                  # share of neighbours from the other split
+    expected = np.where(split == 0, len(fb), len(fa)) / (len(X) - 1)       # that share if the splits were mixed
+
+    def shift(rows) -> float:
+        return float(np.clip(1 - other[rows].mean() / expected[rows].mean(), 0, 1))
+
     return {"other_domain_neighbour_frac": float(other.mean()), "expected_if_mixed": float(expected.mean()),
-            "shift_score": shift(slice(None)), "shift_score_ref": shift(dom == 0), "shift_score_cand": shift(dom == 1),
-            "k": int(k)}
+            "shift_score": shift(slice(None)), "shift_score_ref": shift(split == 0),
+            "shift_score_cand": shift(split == 1), "k": int(k)}
 ```
 
-`src/gates/preflight.py`, lines 112 to 120:
+`src/gates/preflight.py`, lines 115 to 123:
 
 ```python
 def gate_preflight(cfg, task, reporter, root: Path, out_dir: Path) -> dict:
@@ -1357,7 +1379,7 @@ This copies how the Chisel server runs its models, so the numbers mean the same 
 
 ## 6.11 The serving gate as a task (`src/gates/serve_gate.py`)
 
-`src/gates/serve_gate.py`, lines 67 to 75:
+`src/gates/serve_gate.py`, lines 68 to 76:
 
 ```python
 def measure_isolated(model_dir: Path, s, out_json: Path) -> dict:
@@ -1371,7 +1393,7 @@ def measure_isolated(model_dir: Path, s, out_json: Path) -> dict:
     return json.loads(out_json.read_text())
 ```
 
-`src/gates/serve_gate.py`, lines 78 to 104:
+`src/gates/serve_gate.py`, lines 79 to 105:
 
 ```python
 @hydra.main(config_path="../../conf", config_name="config", version_base="1.3")
@@ -1430,37 +1452,38 @@ def plan(c, classes: list[str] | None = None) -> list[dict]:
 
     trains = [step(f"train_{n}", "train", ["domain_check", "serve_gate_pre"],
                    {**c.train_params, "data": n, "architecture": c.classes[n].architecture,
-                    "encoder": c.classes[n].encoder}) for n in names]
+                    "encoder": c.classes[n].encoder, "loss": c.classes[n].get("loss")}) for n in names]
     return [step("domain_check", "domain_check", extra={"data": "loveda"}),
             step("serve_gate_pre", "serve_gate", extra={**c.serve_params, "serve.source": "random", "serve.spec": spec}),
             *trains,
             step("serve_gate_post", "serve_gate", [t["name"] for t in trains], {**c.serve_params, "serve.source": "tasks"})]
 ```
 
-`src/orchestration/pipeline.py`, lines 50 to 58:
+`src/orchestration/pipeline.py`, lines 50 to 59:
 
 ```python
 def newest_base_task_id(project: str, name: str) -> str:
-    """The newest NON-archived task with this exact name, whatever its status.
+    """The most recently CREATED non-archived task with this exact name, whatever its status.
     PipelineController's own lookup by name also returns archived tasks and skips `failed` ones, so after
-    re-registering it can silently pick an old base task pinned to an old commit."""
+    re-registering it can silently pick an old base task pinned to an old commit. Creation time, not last_update:
+    stopping or editing an old base task bumps its last_update and made it look newest."""
     from clearml import Task
 
     if not (tasks := Task.get_tasks(project_name=project, task_name=f"^{name}$", allow_archived=False)):
         raise SystemExit(f"no non-archived base task named {name!r} in project {project!r}")
-    return max(tasks, key=lambda t: t.data.last_update).id
+    return max(tasks, key=lambda t: t.data.created).id
 ```
 
-`src/orchestration/pipeline.py`, lines 61 to 68:
+`src/orchestration/pipeline.py`, lines 62 to 69:
 
 ```python
 def build(c, classes: list[str] | None = None):
     from clearml import PipelineController
 
     pipe = PipelineController(name=c.name, project=c.project, version=c.version, add_pipeline_tags=True)
-    for s in plan(c, classes):
-        s["base_task_id"] = newest_base_task_id(s.pop("base_task_project"), s.pop("base_task_name"))
-        pipe.add_step(**s)
+    for step in plan(c, classes):
+        project, name = step.pop("base_task_project"), step.pop("base_task_name")   # add_step takes the id, not these
+        pipe.add_step(**step, base_task_id=newest_base_task_id(project, name))
     return pipe
 ```
 
@@ -1475,7 +1498,7 @@ def build(c, classes: list[str] | None = None):
 
 ## 6.13 ONNX export (`src/export_onnx.py`)
 
-`src/export_onnx.py`, lines 46 to 52:
+`src/export_onnx.py`, lines 49 to 55:
 
 ```python
 def threshold_from_rows(rows: list[dict], metric: str, class_name: str) -> float | None:
@@ -1487,7 +1510,7 @@ def threshold_from_rows(rows: list[dict], metric: str, class_name: str) -> float
     return float(max(rows, key=lambda r: r[key])["threshold"])
 ```
 
-`src/export_onnx.py`, lines 62 to 85:
+`src/export_onnx.py`, lines 65 to 88:
 
 ```python
 def export_model(network: torch.nn.Module, out: Path, names: list[str], size: int = 1280, opset: int = 17,
@@ -1611,27 +1634,20 @@ shrunk *trained* model is not measured yet.
 
 ## 6.15 Building the network (`src/model_factory.py`)
 
-`src/model_factory.py`, lines 21 to 39:
+`src/model_factory.py`, lines 10 to 21:
 
 ```python
 def build_model(cfg: DictConfig) -> nn.Module:
-    # cfg.model = {_target_: smp.create_model, arch, encoder_name, encoder_weights, in_channels, classes, ...}
-    model = instantiate(cfg.model, _convert_="all")
-
-    pre = cfg.get("pretrain")
-    if pre is not None and pre.source == "local":
-        # offline-safe: encoder weights from a file made by `python -m src.export_weights`
-        _load_encoder(model.encoder, torch.load(pre.path, map_location="cpu", weights_only=True),
-                      f"local weights {pre.path}")
-    elif pre is not None and pre.source == "torchgeo":
-        import torchgeo.models as tgm
-
-        weights = getattr(tgm, pre.weights_enum)[pre.weights_name]
-        expected = weights.meta.get("in_chans")
-        if expected is not None and expected != cfg.model.in_channels:
-            raise ValueError(f"{pre.weights_name} expects {expected} channels, data.in_channels="
-                             f"{cfg.model.in_channels}")
-        _load_encoder(model.encoder, weights.get_state_dict(), f"torchgeo {pre.weights_name}")
+    """cfg.model = {_target_: smp.create_model, arch, encoder_name, encoder_weights, in_channels, classes, ...}.
+    `pretrain.source` smp: create_model already loaded the weights; local / torchgeo: they replace the encoder's."""
+    model = instantiate(cfg.model, _convert_="all") # construct the model using Hydra's instantiate and convert all to plain python so smp can understand
+    pre = cfg.get("pretrain") # get the pretrain configuration if it exists example unet 
+    source = pre.source if pre is not None else None
+    if source == "local":       # offline-safe: a file made by `python -m src.export_weights`
+        state = torch.load(pre.path, map_location="cpu", weights_only=True)
+        _load_encoder(model.encoder, state, f"local weights {pre.path}")
+    elif source == "torchgeo":
+        _load_encoder(model.encoder, _torchgeo_state(pre, cfg.model.in_channels), f"torchgeo {pre.weights_name}")
     return model
 ```
 
@@ -1767,8 +1783,8 @@ except Exception:
 # Kaggle already ships a CUDA build of torch: let the agent's venv reuse it instead of reinstalling.
 Path("~/clearml.conf").expanduser().write_text("agent {\n  package_manager { system_site_packages: true }\n}\n")
 
+# Install and start the ClearML agent with the specified queue and GPU.
 subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "clearml-agent"])
-subprocess.run(["clearml-agent", "daemon", "--queue", QUEUE, "--gpus", "0"], check=True)
 ```
 
 **What it does.**
@@ -1779,12 +1795,13 @@ on the `kaggle` queue with GPU 0. The last line keeps running; the agent stops w
 
 ## 6.19 Which settings ClearML may change (`conf/config.yaml`)
 
-`conf/config.yaml`, lines 59 to 78:
+`conf/config.yaml`, lines 72 to 95:
 
 ```yaml
   tunable:
     - architecture
     - encoder
+    - loss                    # config group: loss/<class>.yaml (weights per class), default = 0.5 BCE + 0.5 Dice
     - data                    # config group: which class / dataset config (building, road, water, vegetation, loveda)
     - optimizer.lr
     - optimizer.weight_decay
@@ -1792,6 +1809,9 @@ on the `kaggle` queue with GPU 0. The last line keeps running; the agent stops w
     - loss.bce_weight
     - train.batch_size
     - train.epochs
+    - augment.hflip
+    - augment.vflip
+    - augment.rot90
     - data.root
     - data.clearml_dataset_id
     - preflight.enabled
@@ -1816,10 +1836,10 @@ re-register the base tasks.
 
 ```yaml
 classes:
-  building:   {architecture: unet, encoder: resnet34_imagenet}
-  road:       {architecture: unet, encoder: resnet34_imagenet}
-  water:      {architecture: unet, encoder: resnet34_imagenet}
-  vegetation: {architecture: unet, encoder: resnet34_imagenet}
+  building:   {architecture: unet, encoder: resnet34_imagenet, loss: building}
+  road:       {architecture: unet, encoder: resnet34_imagenet, loss: road}
+  water:      {architecture: unet, encoder: resnet34_imagenet, loss: water}
+  vegetation: {architecture: unet, encoder: resnet34_imagenet, loss: vegetation}
 ```
 
 **What it does.**

@@ -59,7 +59,7 @@ finalize:
 
 clearml:                      # everything under here is about ClearML, not about the model
   enabled: true               # false = run fully offline, no Task is created
-  project: building-segmentation
+  project: chisel-segmentation
   task_name: ${model.arch}-${model.encoder_name}
   tags: [hydra, smp]
   output_uri: true            # true = ClearML files server; or s3://..., gs://...

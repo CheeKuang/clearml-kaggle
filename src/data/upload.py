@@ -16,7 +16,7 @@ from clearml import Dataset
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--path", required=True, help="local folder with train/ and val/")
-    ap.add_argument("--project", default="building-segmentation")
+    ap.add_argument("--project", default="chisel-segmentation")
     ap.add_argument("--name", default="loveda-multi")
     ap.add_argument("--parent", default=None, help="id of the previous version")
     a = ap.parse_args()

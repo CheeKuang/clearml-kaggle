@@ -8,7 +8,7 @@ tmp=$(mktemp -d)
 tail -n +2 GUIDE.md > "$tmp/body.md"                       # the first line (# title) becomes the cover page
 cp guide_print.css "$tmp/print.css"
 pandoc "$tmp/body.md" -f gfm -t html5 -s --toc --toc-depth=2 \
-  --metadata title="Building-segmentation pipeline: beginner handbook" \
+  --metadata title="Chisel-segmentation pipeline: beginner handbook" \
   --metadata subtitle="ClearML + Hydra + Kaggle. One model per class for the Chisel server." \
   --metadata date="Generated from docs/GUIDE.md, $(date +%Y-%m-%d)" --metadata toc-title="Contents" \
   -c print.css -o "$tmp/GUIDE.html"
