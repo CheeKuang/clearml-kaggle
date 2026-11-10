@@ -39,9 +39,9 @@ def plan(c, classes: list[str] | None = None) -> list[dict]:
                 "parameter_override": overrides(c.params, extra or {})}
 
     trains = [step(f"train_{n}", "train", ["domain_check", "serve_gate_pre"],
-                   {**c.train_params, "data": n, "architecture": c.classes[n].architecture,
+                   {**c.train_params, "data": c.classes[n].get("data", n), "architecture": c.classes[n].architecture,
                     "encoder": c.classes[n].encoder, "loss": c.classes[n].get("loss")}) for n in names]
-    return [step("domain_check", "domain_check", extra={"data": "loveda"}),
+    return [step("domain_check", "domain_check", extra={"data": c.get("check_data", "loveda")}),
             step("serve_gate_pre", "serve_gate", extra={**c.serve_params, "serve.source": "random", "serve.spec": spec}),
             *trains,
             step("serve_gate_post", "serve_gate", [t["name"] for t in trains], {**c.serve_params, "serve.source": "tasks"})]

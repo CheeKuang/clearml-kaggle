@@ -1,0 +1,44 @@
+# The same pipeline on OpenEarthMap (data/oem_416, 0.6 m per pixel; python -m src.data.prepare_oem). Differences from
+# pipeline.yaml: its own name, `check_data`, and a `data:` config per class (conf/data/oem_<class>.yaml). Run it with
+#   python -m src.orchestration.pipeline --config pipeline/pipeline_oem.yaml --queue kaggle --param data.clearml_dataset_id=<id>
+#
+# Per-class gated pipeline (production serves ONE model per class):
+#
+#   domain_check ──┐                    ┌─> train_building ─┐
+#                  ├─> (both gates) ────┼─> train_road      ├─> serve_gate_post
+#   serve_gate_pre ┘                    ├─> train_water     │   (the real ONNX models, all together)
+#   (untrained models of the chosen     └─> train_vegetation┘
+#    architectures, all together)
+#
+# Each step clones a base Task: register the base tasks first (docs/GUIDE.md, section 2.4) on the CURRENT commit.
+# Checklist before running: (1) code pushed and base tasks point at that commit, (2) an agent listens on every queue
+# named below, (3) data.clearml_dataset_id is the multi-class dataset (python -m src.data.upload ... --name loveda-multi).
+# serve_gate only means something on an agent that enforces the production limits (4 request / 8 limit vCPU, 8 GiB).
+name: gated-training-per-class-oem
+project: chisel-segmentation
+version: "2.0.0"
+controller_queue: services      # queue served by an agent that runs the pipeline controller itself (or use --local)
+
+steps:                          # task = name of the base Task in the ClearML project, queue = where its agent listens
+  domain_check: {task: domain-check, queue: kaggle}           # image + label-balance check over all classes
+  serve_gate:   {task: serve-gate,   queue: kaggle}           # runs twice: before (untrained) and after training
+  train:        {task: Unet-resnet34, queue: kaggle}          # cloned once per class
+
+# One model per class. The key is the data config (conf/data/<class>.yaml) and the class name in production.
+# Architecture, encoder and loss may differ per class (names of conf/architecture/, conf/encoder/ and conf/loss/).
+check_data: oem                   # data config of the domain_check step (all four classes of OpenEarthMap)
+classes:
+  building:   {data: oem_building, architecture: unet, encoder: resnet34_imagenet, loss: building}
+  road:       {data: oem_road, architecture: unet, encoder: resnet34_imagenet, loss: road}
+  water:      {data: oem_water, architecture: unet, encoder: resnet34_imagenet, loss: water}
+  vegetation: {data: oem_vegetation, architecture: unet, encoder: resnet34_imagenet, loss: vegetation}
+
+# Written to "Overrides/<key>" on every step (same keys as clearml.tunable in conf/config.yaml).
+params:
+  data.clearml_dataset_id: null   # pass --param data.clearml_dataset_id=<id> (printed by python -m src.data.upload)
+
+train_params:                       # train steps only
+  preflight.enabled: false          # domain_check already gated this run
+
+serve_params:                       # both serve_gate steps (the production limits are in conf/serve/default.yaml)
+  serve.memory_limit_gib: 8
