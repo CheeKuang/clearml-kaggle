@@ -1,0 +1,10 @@
+# ALL four classes in ONE multi-label model (one output channel per entry). Production serves one model per class:
+# use oem_building / oem_road / oem_water / oem_vegetation for that.
+defaults:
+  - _oem_base
+  - _self_
+classes:                  # name -> list of mask ids that count as that class (independent binary channels)
+  building: [8]
+  road: [4]
+  water: [6]
+  vegetation: [5, 7]

@@ -45,6 +45,7 @@ Hydra composes conf/  ->  init_clearml (Task, editable "Overrides", recompose)  
 | once | `pip install -r requirements.txt` and `clearml-init` |
 | once per data version | `python -m src.data.prepare --src data/loveda --out data/loveda_multi` |
 | | `python -m src.data.upload --path data/loveda_multi --name loveda-multi` (prints the dataset id) |
+| OpenEarthMap instead of LoveDA | `python -m src.data.prepare_oem` (0.6 m per pixel, 416 px crops, whole regions held out) into `data/oem_416`, then `python -m src.data.upload --path data/oem_416 --name oem-416`; train with `data=oem_road` etc. Check it against `docs/DATASET_CHECKLIST.md` first |
 | optional, any time | `python -m src.training.train clearml.enabled=false data=water data.root=data/loveda_multi train.epochs=1` |
 | after every `git push` | register the base tasks, with **no extra arguments**: `python -m src.gates.domain_check`, `python -m src.gates.serve_gate`, `python -m src.training.train` (may be stopped after ~80 s); archive the old ones |
 | every Kaggle session | start the agent: `kaggle/README.md` |
@@ -60,7 +61,8 @@ from ClearML (UI, pipeline, HPO) only if its key is in `clearml.tunable` in `con
 conf/                     Hydra configuration: the single source of truth for every setting
   config.yaml               defaults, training/sweep/export settings, the `tunable` keys ClearML may override
   data/                     which mask ids form each class: building, road, water, vegetation (one model each),
-                            loveda (all four in one model), buildings (legacy binary masks)
+                            loveda (all four in one model), buildings (legacy binary masks);
+                            oem_building / oem_road / oem_water / oem_vegetation / oem: the same for OpenEarthMap ids
   architecture/ encoder/    the network (Unet, FPN, DeepLabV3+) and its encoder + pretrained weights
   loss/ preflight/ serve/   loss weights, the data-gate limits, the serving-gate limits (production container)
 src/

@@ -1,0 +1,6 @@
+# ONE binary class for a per-class model, from OpenEarthMap ids (production serves one model per class).
+defaults:
+  - _oem_base
+  - _self_
+classes:
+  building: [8]

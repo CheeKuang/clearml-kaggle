@@ -1,0 +1,11 @@
+# Shared by every OpenEarthMap data config (not selectable on its own: it has no `classes`).
+# layout: <root>/<split>/images/*.png  and  <root>/<split>/masks/*.png (same file names)
+# Masks hold the original OEM ids: 0 unlabeled, 1 bareland, 2 rangeland, 3 developed space, 4 road, 5 tree, 6 water,
+# 7 agriculture, 8 building.   Make them with: python -m src.data.prepare_oem (0.6 m per pixel, 416 px crops).
+root: ./data/oem_416
+clearml_dataset_id: null  # if set, root is replaced by Dataset.get(...).get_local_copy()
+in_channels: 3
+divide_by: 255.0          # same input scaling as the Chisel server (RGB / 255, no mean/std)
+mean: null
+std: null
+splits: {train: train, val: val}

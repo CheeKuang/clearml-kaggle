@@ -1,0 +1,6 @@
+# ONE binary class for a per-class model, from OpenEarthMap ids (production serves one model per class).
+defaults:
+  - _oem_base
+  - _self_
+classes:
+  vegetation: [5, 7]      # tree + agriculture; OEM has no single vegetation class, rangeland (2) is left out
