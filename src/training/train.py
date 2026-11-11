@@ -58,7 +58,7 @@ def export_for_server(cfg, task, reporter, module, df, root: Path, out_dir: Path
 
     if e.validate.enabled and single and cfg.data.mean is None:                  # the server only scales by 1/255
         ds = TileDataset(root, cfg.data.splits[cfg.sweep.split], cfg, limit=e.validate.tiles, seed=cfg.seed)
-        ious = validate_onnx(files, ds, thr if thr is not None else 0.5, e.size)
+        ious = validate_onnx(files, ds, thr if thr is not None else 0.5, e.size, scale=e.validate.get("scale", "native"))
         if "onnx_shrunk_iou" in ious:
             ious["onnx_shrunk_iou_drop"] = ious["onnx_iou"] - ious["onnx_shrunk_iou"]
         for k, v in ious.items():

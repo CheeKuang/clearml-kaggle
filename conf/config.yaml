@@ -38,7 +38,7 @@ sweep:                        # post-training, on the best checkpoint
   enabled: true
   split: val                  # use a held-out split (e.g. test) to avoid picking on the tuning set
   tta: [none, flip, d4]       # none | flip (4) | d4 (8)
-  thresholds: {start: 0.30, stop: 0.70, step: 0.05}
+  thresholds: {start: 0.30, stop: 0.90, step: 0.05}   # up to 0.90: the best threshold of three deployed models sat at the old top, 0.70
   metric: iou                 # iou | f1
 
 export:
@@ -50,6 +50,7 @@ export:
       method: integer_weights # integer_weights | float_weights
       ir_version: 8           # as in chisel-pipeline-convert's notebook
     validate:                 # IoU of the exported files through the server's pre/post-processing (onnxruntime CPU)
+      scale: native           # native = a piece of a large image (97% of Chisel crops); letterbox = a small image, enlarged to 1280; both
       enabled: true
       tiles: 32               # tiles of the sweep split, same tiles for the full and the shrunk model
 

@@ -17,7 +17,8 @@ If a word is new, it is here.
 | **Crop, square** | A small square cut from a photo. The model trains on these. |
 | **Mask, label** | A second image, the same size as the photo, where each pixel says what it is: road, water, building and so on. |
 | **Class** | One kind of thing the model must find, such as "road". |
-| **GSD** | Ground sampling distance: how many metres of ground one pixel covers. 0.3 m means a pixel is 30 cm wide. A smaller number is a sharper photo. |
+| **GSD** | Ground sampling distance: how many metres of ground one pixel covers. 0.3 m means a pixel is 30 cm wide. A smaller GSD captures smaller physical shapes and boundaries (spatial clarity). |
+| **Bit depth** | How many brightness levels one pixel can store for each colour. 8 bits is 256 levels (0 to 255), 12 bits is 4,096, 16 bits is 65,536. More bits capture subtler levels of light and shade (dynamic range), so details do not disappear into pure black or blown-out white. |
 | **Resample** | Change a photo's pixel size, which is like zooming in or out. |
 | **Nearest neighbour** | A way of resizing that copies the closest pixel instead of blending. Used for masks so "road" never blends into "building". |
 | **Train and val** | Train is what the model learns from. Val (validation) is held back to check how well it learned. |
@@ -44,6 +45,17 @@ learned, and IoU drops with no error to tell you why.
 - **Fix:** resample every tile to the target GSD before training: images with area averaging when shrinking, masks
   with nearest neighbour so ids stay ids. Do not mix GSDs in one training set without resampling or scale augmentation.
 - **Remember:** upscaling does not add detail. A 1 m source resampled to 0.3 m is a blurry 0.3 m image.
+
+**Two different ways a photo can be "better".** They are independent, and a model needs both to match what it will see:
+
+| | Measures | More or smaller gives you | In Chisel |
+|---|---|---|---|
+| **GSD** (spatial) | metres of ground per pixel | **Smaller GSD:** captures smaller physical shapes and boundaries (spatial clarity) | 0.55 to 0.6 m |
+| **Bit depth** (brightness) | levels of light per pixel and colour | **More bits:** captures subtler levels of light and shade (dynamic range), so details do not disappear into pure black or blown-out white | 8 bits (256 levels) |
+
+A smaller GSD does not give more shades of grey, and more bits do not make objects bigger. A 16-bit photo at 0.6 m
+still shows a 0.6 m world, only with finer tones. If a dataset has more bits than production sends, the extra tones
+must be squeezed to 8 bits the same way in training and in production (2.2, "Bit depth above 8").
 
 **What "within about 25%" means, with an example.** Networks tolerate a modest change in object size, because of
 augmentation and because convolution layers pool over neighbouring pixels. Say the training set is 0.40 m per pixel,

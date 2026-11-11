@@ -122,25 +122,48 @@ def letterbox(img: np.ndarray, size: int) -> tuple[np.ndarray, float, tuple[floa
     return cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)), r, (dw, dh)
 
 
-def validate_onnx(files: dict[str, Path], ds, threshold: float, size: int) -> dict[str, float]:
-    """IoU of each single-class ONNX file on `ds`, through the server's path: uint8 tile -> letterbox -> RGB/255 ->
-    onnxruntime CPU -> serving/postprocess_semantic.py -> 0/255 mask. Same tiles and threshold for every file."""
+def to_native_tile(img: np.ndarray, size: int) -> np.ndarray:
+    """A tile as the server's slicing sees a piece of a LARGE image (> 1280 px): at its own scale in the top left of a
+    size x size tile, padded with 0 (libs/slice_inference.py, pad_edges). No resize, so the model sees real pixels."""
+    h, w = img.shape[:2]
+    canvas = np.zeros((size, size, 3), np.uint8)
+    canvas[:min(h, size), :min(w, size)] = img[:size, :size]
+    return canvas
+
+
+def validate_onnx(files: dict[str, Path], ds, threshold: float, size: int, scale: str = "native") -> dict[str, float]:
+    """IoU of each single-class ONNX file on `ds`, through the server's path: uint8 tile -> RGB/255 -> onnxruntime CPU ->
+    0/255 mask. Same tiles and threshold for every file. `scale` is how the server treats the tile:
+      native     as a piece of a large image (97% of Chisel crops are > 1280 px): its own scale, padded with 0
+      letterbox  as a small image (<= 1280 px): letterboxed up to size x size. A 416 px crop is enlarged 3x, so
+                 objects are 3x bigger than in training: this scores far lower and says little about large images
+      both       native as `<file>_iou`, letterbox as `<file>_iou_letterbox`
+    With one scale its numbers are plain `<file>_iou`."""
     import onnxruntime as ort
 
     from serving.postprocess_semantic import postprocess_semantic_masks
 
+    modes = ("native", "letterbox") if scale == "both" else (scale,)
     sessions = {k: ort.InferenceSession(str(p), providers=["CPUExecutionProvider"]) for k, p in files.items()}
-    counts = {k: np.zeros(3) for k in files}                                    # tp, fp, fn
+    counts = {(k, m): np.zeros(3) for k in files for m in modes}                  # tp, fp, fn
     for i in range(len(ds)):
-        img = np.rint(ds.image(i).transpose(1, 2, 0) * 255).astype(np.uint8)  # back to the tile the server receives
-        padded, ratio, pad = letterbox(img, size)
-        x = np.ascontiguousarray(padded.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+        img = np.rint(ds.image(i).transpose(1, 2, 0) * 255).astype(np.uint8)    # back to the tile the server receives
         y = ds.mask(i)[0] > 0.5
-        for k, sess in sessions.items():
-            p = postprocess_semantic_masks(sess.run(["probs"], {"images": x}), img.shape[:2], ratio, pad, size,
-                                           threshold) > 0
-            counts[k] += [(p & y).sum(), (p & ~y).sum(), (~p & y).sum()]
-    return {f"{k}_iou": float(tp / (tp + fp + fn + 1e-8)) for k, (tp, fp, fn) in counts.items()}
+        for m in modes:
+            if m == "native" and max(img.shape[:2]) <= size:
+                x = np.ascontiguousarray(to_native_tile(img, size).transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+            else:                                                                   # letterbox (also: tile bigger than size)
+                padded, ratio, pad = letterbox(img, size)
+                x = np.ascontiguousarray(padded.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
+            for k, sess in sessions.items():
+                probs = sess.run(["probs"], {"images": x})
+                if m == "native" and max(img.shape[:2]) <= size:
+                    p = probs[0][0, 0][:img.shape[0], :img.shape[1]] > threshold
+                else:
+                    p = postprocess_semantic_masks(probs, img.shape[:2], ratio, pad, size, threshold) > 0
+                counts[k, m] += [(p & y).sum(), (p & ~y).sum(), (~p & y).sum()]
+    return {f"{k}_iou" if m == modes[0] else f"{k}_iou_{m}": float(tp / (tp + fp + fn + 1e-8))
+            for (k, m), (tp, fp, fn) in counts.items()}
 
 
 def export_untrained(class_name: str, architecture: str, encoder: str, out: Path, size: int = 1280) -> dict:
