@@ -1,0 +1,5 @@
+# @package model
+# SegFormer (smp): a transformer encoder (MiT) + a light all-MLP decoder. Predicts at 1/4 of the input size and upsamples,
+# so thin objects (roads) lose detail compared with Unet. Pair it with a `mit_*` encoder (conf/encoder/mit_b*_imagenet.yaml).
+_target_: segmentation_models_pytorch.create_model
+arch: Segformer

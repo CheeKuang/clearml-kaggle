@@ -1,0 +1,7 @@
+# @package _global_
+# SegFormer encoder MiT-B2, pretrained on ImageNet (downloaded by smp the first time).
+model:
+  encoder_name: mit_b2
+  encoder_weights: imagenet
+pretrain:
+  source: smp
