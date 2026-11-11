@@ -63,7 +63,7 @@ def export_for_server(cfg, task, reporter, module, df, root: Path, out_dir: Path
             ious["onnx_shrunk_iou_drop"] = ious["onnx_iou"] - ious["onnx_shrunk_iou"]
         for k, v in ious.items():
             reporter.single(k, v)
-        print(f"[export] server-path IoU on {len(ds)} {cfg.sweep.split} tiles: {ious}", flush=True)
+        print(f"[export] server-path scores on {len(ds)} {cfg.sweep.split} tiles: {ious}", flush=True)
         side["server_path_iou"] = {"tiles": len(ds), **ious}
         side_path.write_text(json.dumps(side, indent=2))
     upload(task, **files, onnx_meta=side_path)

@@ -23,6 +23,13 @@ def iou_f1(counts):
     return tp / (tp + fp + fn + 1e-8), 2 * tp / (2 * tp + fp + fn + 1e-8)
 
 
+def precision_recall(counts):
+    """precision = tp / (tp + fp): of what the model marked, how much was right. recall = tp / (tp + fn): of what was
+    there, how much the model found. (F1 is their harmonic mean.)"""
+    tp, fp, fn = counts.unbind(-1)
+    return tp / (tp + fp + 1e-8), tp / (tp + fn + 1e-8)
+
+
 def overlay(x, y, p) -> np.ndarray:
     """Image with the prediction in red and the ground truth in green."""
     rgb = x[:3].clone() if x.shape[0] >= 3 else x[:1].repeat(3, 1, 1)
@@ -33,8 +40,9 @@ def overlay(x, y, p) -> np.ndarray:
 
 
 class SegModule(L.LightningModule):
-    """Single device (metrics are not synced across ranks). `val/iou` and `val/f1` are the MEAN over classes (the
-    checkpoint and HPO objective); `val/iou_<class>` / `val/f1_<class>` are logged when there are several classes."""
+    """Single device (metrics are not synced across ranks). `val/iou`, `val/f1`, `val/precision` and `val/recall` are the
+    MEAN over classes (`val/iou` is the checkpoint and HPO objective); `val/<metric>_<class>` is logged when there are
+    several classes."""
 
     def __init__(self, cfg):
         super().__init__()
@@ -78,10 +86,11 @@ class SegModule(L.LightningModule):
 
     def on_validation_epoch_end(self):
         iou, f1 = iou_f1(self._counts)          # one value per class
-        metrics = {"val/iou": iou.mean(), "val/f1": f1.mean()}
+        precision, recall = precision_recall(self._counts)
+        metrics = {"val/iou": iou.mean(), "val/f1": f1.mean(), "val/precision": precision.mean(), "val/recall": recall.mean()}
         if len(self.names) > 1:
-            metrics |= {f"val/iou_{n}": v for n, v in zip(self.names, iou)}
-            metrics |= {f"val/f1_{n}": v for n, v in zip(self.names, f1)}
+            for key, per_class in (("iou", iou), ("f1", f1), ("precision", precision), ("recall", recall)):
+                metrics |= {f"val/{key}_{n}": v for n, v in zip(self.names, per_class)}
         self.log_dict(metrics)
         if self.trainer.sanity_checking:
             return

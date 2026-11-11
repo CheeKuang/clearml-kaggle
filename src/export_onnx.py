@@ -132,13 +132,13 @@ def to_native_tile(img: np.ndarray, size: int) -> np.ndarray:
 
 
 def validate_onnx(files: dict[str, Path], ds, threshold: float, size: int, scale: str = "native") -> dict[str, float]:
-    """IoU of each single-class ONNX file on `ds`, through the server's path: uint8 tile -> RGB/255 -> onnxruntime CPU ->
+    """IoU, precision, recall and F1 of each single-class ONNX file on `ds`, through the server's path: uint8 tile -> RGB/255 -> onnxruntime CPU ->
     0/255 mask. Same tiles and threshold for every file. `scale` is how the server treats the tile:
       native     as a piece of a large image (97% of Chisel crops are > 1280 px): its own scale, padded with 0
       letterbox  as a small image (<= 1280 px): letterboxed up to size x size. A 416 px crop is enlarged 3x, so
                  objects are 3x bigger than in training: this scores far lower and says little about large images
       both       native as `<file>_iou`, letterbox as `<file>_iou_letterbox`
-    With one scale its numbers are plain `<file>_iou`."""
+    With one scale its numbers are plain `<file>_iou`, `<file>_precision`, `<file>_recall`, `<file>_f1`."""
     import onnxruntime as ort
 
     from serving.postprocess_semantic import postprocess_semantic_masks
@@ -162,8 +162,14 @@ def validate_onnx(files: dict[str, Path], ds, threshold: float, size: int, scale
                 else:
                     p = postprocess_semantic_masks(probs, img.shape[:2], ratio, pad, size, threshold) > 0
                 counts[k, m] += [(p & y).sum(), (p & ~y).sum(), (~p & y).sum()]
-    return {f"{k}_iou" if m == modes[0] else f"{k}_iou_{m}": float(tp / (tp + fp + fn + 1e-8))
-            for (k, m), (tp, fp, fn) in counts.items()}
+    out = {}
+    for (k, m), (tp, fp, fn) in counts.items():
+        suffix = "" if m == modes[0] else f"_{m}"
+        out |= {f"{k}_iou{suffix}": float(tp / (tp + fp + fn + 1e-8)),
+                f"{k}_precision{suffix}": float(tp / (tp + fp + 1e-8)),         # of what the file marks, how much is right
+                f"{k}_recall{suffix}": float(tp / (tp + fn + 1e-8)),            # of what is there, how much it finds
+                f"{k}_f1{suffix}": float(2 * tp / (2 * tp + fp + fn + 1e-8))}
+    return out
 
 
 def export_untrained(class_name: str, architecture: str, encoder: str, out: Path, size: int = 1280) -> dict:

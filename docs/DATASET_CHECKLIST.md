@@ -24,6 +24,9 @@ If a word is new, it is here.
 | **Train and val** | Train is what the model learns from. Val (validation) is held back to check how well it learned. |
 | **Leakage** | When val photos are too similar to train photos, so the check looks better than the model really is. |
 | **IoU** | A score from 0 to 1 for how well the predicted area overlaps the true area. 1 is perfect. |
+| **Precision** | Of the pixels the model marked as "road", how many really are road. Low precision means it invents things. |
+| **Recall** | Of the pixels that really are road, how many the model found. Low recall means it misses things. |
+| **F1** | One score that balances precision and recall (their harmonic mean). It is high only when both are high. |
 | **Region** | A city or an area. Splitting by region means whole cities are held back. |
 | **Domain shift** | How different two sets of photos look from each other (colour, light, place). |
 | **Epoch** | One full pass through all the training squares. |

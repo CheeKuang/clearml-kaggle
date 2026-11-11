@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .module import confusion, iou_f1
+from .module import confusion, iou_f1, precision_recall
 
 TTA_SETS = {                                                    # (k rot90 steps, horizontal flip)
     "none": [(0, False)],
@@ -25,7 +25,7 @@ def _inv(x, k, f):
 
 @torch.no_grad()
 def run_sweep(module, loader, cfg, device) -> tuple[pd.DataFrame, dict]:
-    """One row per (tta, threshold): mean `iou`/`f1` over classes plus `iou_<class>`/`f1_<class>`.
+    """One row per (tta, threshold): mean `iou`/`f1`/`precision`/`recall` over classes plus the same per class (`iou_<class>` ...).
     best = the row with the best mean; best["class_thresholds"] = the best threshold per class at that tta."""
     s, names = cfg.sweep, module.names
     thr = torch.as_tensor(np.arange(s.thresholds.start, s.thresholds.stop + 1e-9, s.thresholds.step),
@@ -39,10 +39,12 @@ def run_sweep(module, loader, cfg, device) -> tuple[pd.DataFrame, dict]:
             probs = torch.stack([_inv(module(_fwd(x, k, f)).sigmoid(), k, f) for k, f in TTA_SETS[tta]]).mean(0)
             counts += confusion((probs[None] > thr.view(-1, 1, 1, 1, 1)).float(), y, (1, 3, 4))   # (T, C, 3)
         iou, f1 = iou_f1(counts)
+        precision, recall = precision_recall(counts)
+        scores = {"iou": iou, "f1": f1, "precision": precision, "recall": recall}                 # each (T, C)
         for k, t in enumerate(thr.tolist()):
-            row = {"tta": tta, "threshold": round(t, 4), "iou": iou[k].mean().item(), "f1": f1[k].mean().item()}
+            row = {"tta": tta, "threshold": round(t, 4), **{m: v[k].mean().item() for m, v in scores.items()}}
             for c, n in enumerate(names):
-                row[f"iou_{n}"], row[f"f1_{n}"] = iou[k, c].item(), f1[k, c].item()
+                row |= {f"{m}_{n}": v[k, c].item() for m, v in scores.items()}
             rows.append(row)
     df = pd.DataFrame(rows)
     best = df.loc[df[s.metric].idxmax()].to_dict()
@@ -55,7 +57,11 @@ def report_sweep(reporter, df, best, metric):
     reporter.table("sweep", "tta x threshold", df)
     for r in df.itertuples():
         reporter.scalar("sweep/iou", r.tta, r.iou, int(round(r.threshold * 100)))
-    reporter.single(f"sweep_best_{metric}", best[metric])
+    for r in df[df.tta == best["tta"]].itertuples():                       # the trade-off at the best TTA: a higher threshold trades recall for precision
+        reporter.scalar(f"sweep/precision_recall ({best['tta']})", "precision", r.precision, int(round(r.threshold * 100)))
+        reporter.scalar(f"sweep/precision_recall ({best['tta']})", "recall", r.recall, int(round(r.threshold * 100)))
+    for m in ("iou", "f1", "precision", "recall"):                          # at the best threshold (the one that maximises `metric`)
+        reporter.single(f"sweep_best_{m}", best[m])
     reporter.single("sweep_best_threshold", best["threshold"])
     for n, t in best["class_thresholds"].items():
         reporter.single(f"sweep_best_threshold_{n}", t)
