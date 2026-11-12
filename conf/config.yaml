@@ -22,6 +22,7 @@ train:
   num_workers: 4
   amp: true
   patience: 8
+  resume_from: null           # a checkpoint (https://... URL or local .ckpt) to continue from: epoch, optimizer, LR schedule and early-stopping state come back
   deterministic: true         # Lightning "warn": deterministic kernels where torch has them, a warning where it does not
 
 augment:                      # training split only; image and mask get the same transform (src/data/tiles.py)
@@ -81,6 +82,7 @@ clearml:                      # everything under here is about ClearML, not abou
     - loss.bce_weight
     - train.batch_size
     - train.epochs
+    - train.resume_from
     - augment.hflip
     - augment.vflip
     - augment.rot90

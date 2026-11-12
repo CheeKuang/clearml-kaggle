@@ -9,6 +9,7 @@ Masks are returned as (C, H, W), one channel per class.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import torch
@@ -37,8 +38,28 @@ def _read(path, bands=None) -> np.ndarray:
     return arr[:bands] if bands else arr
 
 
+def flip_rotate(a) -> Callable:
+    """The training augmentation of conf `augment`: random horizontal / vertical flip and a random 90-degree rotation, the same
+    for the image and its mask. Returns a function (x, y) -> (x, y). Pass any other function with that signature as
+    `TileDataset(..., transform=...)` to augment differently."""
+    def apply(x, y):
+        if torch.rand(1) < a.hflip:
+            x, y = x.flip(-1), y.flip(-1)
+        if torch.rand(1) < a.vflip:
+            x, y = x.flip(-2), y.flip(-2)
+        if a.rot90:
+            k = int(torch.randint(0, 4, (1,)))
+            x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
+        return x, y
+    return apply
+
+
 class TileDataset(Dataset):
-    def __init__(self, root: Path, split: str, cfg, augment: bool = False, limit: int | None = None, seed: int = 0):
+    """Map-style dataset: len(ds), ds[i] -> (image, mask) tensors, (C, H, W) each, after `transform` if one is set.
+    `augment=True` is the shortcut for `transform=flip_rotate(cfg.augment)`; use it for the training split only."""
+
+    def __init__(self, root: Path, split: str, cfg, augment: bool = False, limit: int | None = None, seed: int = 0,
+                 transform: Callable | None = None):
         self.imgs = sorted((root / split / "images").glob("*.*"))
         if not self.imgs:
             raise FileNotFoundError(f"No images under {root / split / 'images'}")
@@ -46,21 +67,10 @@ class TileDataset(Dataset):
             pick = np.random.default_rng(seed).choice(len(self.imgs), limit, replace=False)
             self.imgs = [self.imgs[i] for i in sorted(pick)]
         self.mask_dir, self.c = root / split / "masks", cfg.data
-        self.augment = cfg.augment if augment else None
+        self.transform = transform or (flip_rotate(cfg.augment) if augment else None)
         self.class_names = class_names(self.c)
         if self.c.get("classes"):
-            self._check_class_ids()
-
-    def _check_class_ids(self, n: int = 8):
-        """Fail loudly if none of the class ids occur (e.g. binary 0/255 masks with a class list): every target would
-        silently be empty."""
-        picks = np.linspace(0, len(self.imgs) - 1, min(n, len(self.imgs))).astype(int)
-        seen = set().union(*(np.unique(_read(self.mask_dir / self.imgs[i].name)[0]).tolist() for i in picks))
-        wanted = {i for ids in self.c.classes.values() for i in ids}
-        if not seen & wanted:
-            raise ValueError(f"None of the class ids {sorted(wanted)} occur in {len(picks)} sampled masks (values seen: "
-                             f"{sorted(seen)[:12]}). Use data=buildings for binary masks, or a dataset made with "
-                             f"`python -m src.data.prepare --mode labels`.")
+            check_class_ids(self)
 
     def __len__(self):
         return len(self.imgs)
@@ -78,18 +88,23 @@ class TileDataset(Dataset):
             return np.stack([np.isin(m, list(ids)) for ids in self.c.classes.values()]).astype(np.float32)
         return (m > 0)[None].astype(np.float32)
 
-    def class_ratios(self) -> np.ndarray:
-        """(N tiles, C) share of positive pixels per tile and class."""
-        return np.array([self.mask(i).mean((1, 2)) for i in range(len(self))])
-
     def __getitem__(self, i):
         x, y = torch.from_numpy(self.image(i)), torch.from_numpy(self.mask(i))
-        if a := self.augment:                   # conf `augment`: random flips + 90-degree rotation, same for image and mask
-            if torch.rand(1) < a.hflip:
-                x, y = x.flip(-1), y.flip(-1)
-            if torch.rand(1) < a.vflip:
-                x, y = x.flip(-2), y.flip(-2)
-            if a.rot90:
-                k = int(torch.randint(0, 4, (1,)))
-                x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
-        return x, y
+        return self.transform(x, y) if self.transform else (x, y)
+
+
+def check_class_ids(ds, n: int = 8):
+    """Fail loudly if none of the class ids occur (e.g. binary 0/255 masks with a class list): every target would
+    silently be empty. Looks at `n` masks spread over the dataset."""
+    picks = np.linspace(0, len(ds) - 1, min(n, len(ds))).astype(int)
+    seen = set().union(*(np.unique(_read(ds.mask_dir / ds.imgs[i].name)[0]).tolist() for i in picks))
+    wanted = {i for ids in ds.c.classes.values() for i in ids}
+    if not seen & wanted:
+        raise ValueError(f"None of the class ids {sorted(wanted)} occur in {len(picks)} sampled masks (values seen: "
+                         f"{sorted(seen)[:12]}). Use data=buildings for binary masks, or a dataset made with "
+                         f"`python -m src.data.prepare --mode labels`.")
+
+
+def class_ratios(ds) -> np.ndarray:
+    """(N tiles, C) share of positive pixels per tile and class. Used by the data gate (src/gates/preflight.py)."""
+    return np.array([ds.mask(i).mean((1, 2)) for i in range(len(ds))])

@@ -108,7 +108,13 @@ def main(cfg: DictConfig):
            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
     reporter.params("Run", run)
     print(f"[run] {json.dumps(run)}", flush=True)
-    trainer.fit(module, train_dl, val_dl)
+    resume = cfg.train.get("resume_from")
+    if resume:
+        if str(resume).startswith(("http://", "https://", "s3://", "gs://")):
+            from clearml import StorageManager
+            resume = StorageManager.get_local_copy(str(resume))          # the ClearML files server, with this machine's credentials
+        print(f"[resume] continuing from {resume}", flush=True)
+    trainer.fit(module, train_dl, val_dl, ckpt_path=str(resume) if resume else None)
     module.load_state_dict(torch.load(ckpt.best_model_path, map_location="cpu", weights_only=False)["state_dict"])
     reporter.single("best_val_iou", module.best_iou)
 

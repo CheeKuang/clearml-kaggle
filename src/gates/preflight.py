@@ -11,7 +11,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 
 from ..common.clearml_utils import fail_gate
-from ..data.tiles import TileDataset
+from ..data.tiles import TileDataset, class_ratios
 
 
 class PreflightFailed(RuntimeError):
@@ -41,6 +41,12 @@ def label_balance(ra: np.ndarray, rb: np.ndarray) -> dict:
     return {"wasserstein": float(wasserstein_distance(ra, rb)), "mean_ratio_ref": ma, "mean_ratio_cand": mb,
             "ratio_gap_rel": float(abs(ma - mb) / max(ma, mb, 1e-12)),
             "empty_tile_frac_ref": float((ra == 0).mean()), "empty_tile_frac_cand": float((rb == 0).mean())}
+
+
+def class_rarity(r: np.ndarray) -> dict:
+    """How rare is one class in one split? `r` = its pixel share per tile. tile_frac = share of the tiles that contain the class
+    at all, tiles_with = how many, mean_ratio = its average pixel share."""
+    return {"tiles": int(len(r)), "tiles_with": int((r > 0).sum()), "tile_frac": float((r > 0).mean()), "mean_ratio": float(r.mean())}
 
 
 def stats_features(ds) -> np.ndarray:
@@ -84,9 +90,25 @@ def run_preflight(cfg, reporter, ref_ds, cand_ds, out_dir: Path) -> dict:
         s = knn_interleaving(feats(ref_ds), feats(cand_ds), d.k)
         finish("domain_shift", d, s, [f"shift_score {s['shift_score']:.3f} > {d.max_shift}"] if s["shift_score"] > d.max_shift else [])
 
-    if (b := p.label_balance).enabled:
-        RA, RB = ref_ds.class_ratios(), cand_ds.class_ratios()           # (tiles, classes)
+    rarity = p.get("rarity")
+    if p.label_balance.enabled or (rarity and rarity.enabled):
+        RA, RB = class_ratios(ref_ds), class_ratios(cand_ds)           # (tiles, classes)
         names = ref_ds.class_names
+
+    if rarity and rarity.enabled:                                        # is a class too rare to learn or to be scored on?
+        s, v = {}, []
+        for c, cname in enumerate(names):
+            one, tag = len(names) == 1, "" if len(names) == 1 else f"[{cname}] "
+            for split, r in (("reference", RA[:, c]), ("candidate", RB[:, c])):
+                sc = class_rarity(r)
+                s.update({(f"{split}/{k}" if one else f"{cname}/{split}/{k}"): val for k, val in sc.items()})
+                if sc["tile_frac"] < rarity.min_tile_frac:
+                    v.append(f"{tag}{split}: only {sc['tiles_with']} of {sc['tiles']} tiles ({sc['tile_frac']:.1%}) contain the class, below {rarity.min_tile_frac:.0%}")
+                if sc["mean_ratio"] < rarity.min_mean_ratio:
+                    v.append(f"{tag}{split}: the class covers {sc['mean_ratio']:.2%} of the pixels on average, below {rarity.min_mean_ratio:.0%}")
+        finish("rarity", rarity, s, v)
+
+    if (b := p.label_balance).enabled:
         s, v = {}, []
         for c, cname in enumerate(names):                                # every class on its own
             ra, rb = RA[:, c], RB[:, c]

@@ -592,13 +592,19 @@ Remember:
 
 ## 3.3 The data gate (`src/gates/domain_check.py`, `src/gates/preflight.py`)
 
-It builds a sample (up to 500 tiles) of the train and val splits and runs two checks:
+It builds a sample (up to 500 tiles) of the train and val splits and runs three checks:
 
 - **Domain shift**: summarise every image by per-channel mean/std and percentiles, then ask how often a tile's nearest
   neighbours come from the *other* split. Score 0 means perfectly mixed, 1 means fully separated. Gate: fail above 0.5.
   Measured: 0.004.
 - **Label balance**: for every class, compare the share of positive pixels per tile between splits (Wasserstein
   distance and mean-ratio gap). Reports only (diagnostic), per class.
+- **Rarity**: for every class and each split, the share of the sampled tiles that contain the class at all, and its average
+  pixel share. Warns (diagnostic) when a class is in under 10% of the tiles or covers under 1% of the pixels, because a
+  rare class gives a noisy validation score.
+
+A fourth check is separate and local: `python -m src.gates.production_shift` (or `--prod-dir` on the pipeline launcher)
+compares your production images with the training data. See `docs/GATES_EXPLAINED.md`, section 2.4.
 
 > **Why a data gate?** A train/val split that looks different means validation scores lie. Catching that costs
 > minutes; finding out after a 75-minute run costs a night.
@@ -630,6 +636,51 @@ tiles of 1280 x 1280. It measures the time of a request and the peak memory, and
 `plan(config)` returns a plain list of steps, each a dict of ClearML `add_step` arguments: name, parents, base task,
 queue and `parameter_override` (the "Overrides/..." values). `build()` feeds them to a ClearML `PipelineController`.
 Because the plan is plain data, `--dry-run` can print it without touching ClearML.
+
+### How one pipeline run goes, from the YAML to the agents
+
+```
+ 1  YOU                      python -m src.orchestration.pipeline --config pipeline/pipeline.yaml
+                                 --classes road,building --param data.clearml_dataset_id=<id> --queue kaggle
+                                              |
+ 2  main()                   loads the YAML, then merges your --param / --train-param / --serve-param,
+                             --queue and --classes into it
+                                              |
+ 3  plan()                   turns the YAML into a plain list of steps (--dry-run prints it and stops here)
+                                              |
+ 4  build()                  PipelineController(name, project, version)                      <- ClearML
+                             add_step(name, parents, base_task_id, parameter_override, execution_queue)
+                               once per step; base_task_id = the NEWEST task with that name (newest_base_task_id)
+                                              |
+ 5  start_locally()          the controller runs on your Mac (--local) and starts each step when its
+    (or start())             parents have finished                                          <- ClearML
+                                              |
+ 6  ClearML server           for each ready step: CLONE the base task, write its "Overrides/..." settings,
+                             ENQUEUE it on the queue "kaggle"                               <- ClearML
+                                              |
+ 7  AGENT (Kaggle notebook)  takes the task off the queue, checks out the commit, installs the packages
+                             and runs the script                                            <- ClearML agent
+                                              |
+ 8  the script               init_clearml() reads the Overrides and rebuilds the Hydra config; then it trains,
+    (train.py, gates)        reports scalars and uploads files. A gate that exits with code 2 fails its step,
+                             and the steps after it are never created
+```
+
+**What is standard ClearML and what is written for this project?**
+
+| Part | Standard ClearML | Written for this project |
+|---|---|---|
+| Template ("base") tasks, clones, queues, agents | yes | |
+| `PipelineController`, `add_step`, `parents`, `parameter_override`, `execution_queue` | yes | |
+| `start_locally()` / `start()` | yes | |
+| The YAML file and `plan()` (one training step per class, plain data, `--dry-run`) | | yes |
+| Choosing the newest base task by creation time (`newest_base_task_id`) | | yes (ClearML's own lookup picked old or archived tasks) |
+| The `Overrides` section and rebuilding the Hydra config from it (`src/common/clearml_utils.py`) | built on `task.connect` | the design is ours |
+| Gates that fail a step with exit code 2 (`fail_gate`) | | yes |
+| `serve_gate_post` finding the training steps by the tag `pipe: <id>` | the tag is added by ClearML | the lookup is ours |
+
+So the building blocks are ClearML's documented way of building a pipeline from existing tasks. The glue that carries
+the YAML settings all the way into the training script is the part specific to this project.
 
 ```
 domain_check            Overrides: data=loveda, data.clearml_dataset_id
@@ -746,6 +797,8 @@ the 8-CPU limit is really available.
 | Use a new dataset version | `python -m src.data.upload --path <folder> --name loveda-multi --parent <old id>`, then use the new id. |
 | Make a new setting editable remotely | Add its key to `clearml.tunable` in `conf/config.yaml`; push; re-register base tasks. |
 | Export a model by hand | `python -m src.export_onnx --checkpoint best.ckpt --metadata metadata.json --out models/road.onnx` |
+| Continue a run that stopped (an agent dropped, a session ended) | Set `train.resume_from=<URL of its best.ckpt>` on a clone of the task (Overrides in the UI, or `set_parameter("Overrides/train.resume_from", url)`). The epoch, optimizer, LR schedule and early-stopping state come back. Only epochs since the last best checkpoint are repeated. The agent needs the code with that option: push it, or attach it to the clone as a diff. |
+| Check that production images look like the training data | `python -m src.gates.production_shift --prod-dir <folder> --root data/oem_416`, or add `--prod-dir <folder>` (and `--prod-stop`) to the pipeline command. Runs on your machine; nothing is uploaded. |
 | Measure models by hand | `python -m src.gates.serve_check --models models --tiles 1` |
 | Search hyperparameters | Edit `hpo/space.yaml`, `python -m src.orchestration.hpo --mode clearml`. **Untested** here. |
 | Compare architectures per class | Run the pipeline once per setting, or clone a train step; compare `val/iou_<class>`. |
@@ -1029,7 +1082,7 @@ step that exits non-zero fails, and ClearML never creates the steps after it.
 
 ## 6.5 The dataset: where the data comes from and what a sample is (`src/data/tiles.py`)
 
-`src/data/tiles.py`, lines 18 to 24:
+`src/data/tiles.py`, lines 19 to 25:
 
 ```python
 def resolve_root(cfg) -> Path:
@@ -1041,7 +1094,7 @@ def resolve_root(cfg) -> Path:
     return Path(cfg.data.root)
 ```
 
-`src/data/tiles.py`, lines 68 to 72:
+`src/data/tiles.py`, lines 78 to 82:
 
 ```python
     def image(self, i) -> np.ndarray:
@@ -1051,7 +1104,7 @@ def resolve_root(cfg) -> Path:
         return x
 ```
 
-`src/data/tiles.py`, lines 74 to 79:
+`src/data/tiles.py`, lines 84 to 89:
 
 ```python
     def mask(self, i) -> np.ndarray:
@@ -1062,20 +1115,12 @@ def resolve_root(cfg) -> Path:
         return (m > 0)[None].astype(np.float32)
 ```
 
-`src/data/tiles.py`, lines 85 to 95:
+`src/data/tiles.py`, lines 91 to 93:
 
 ```python
     def __getitem__(self, i):
         x, y = torch.from_numpy(self.image(i)), torch.from_numpy(self.mask(i))
-        if a := self.augment:                   # conf `augment`: random flips + 90-degree rotation, same for image and mask
-            if torch.rand(1) < a.hflip:
-                x, y = x.flip(-1), y.flip(-1)
-            if torch.rand(1) < a.vflip:
-                x, y = x.flip(-2), y.flip(-2)
-            if a.rot90:
-                k = int(torch.randint(0, 4, (1,)))
-                x, y = torch.rot90(x, k, (-2, -1)), torch.rot90(y, k, (-2, -1))
-        return x, y
+        return self.transform(x, y) if self.transform else (x, y)
 ```
 
 **What it does.**
@@ -1090,7 +1135,7 @@ def resolve_root(cfg) -> Path:
 
 ## 6.6 One training run, top to bottom (`src/training/train.py`)
 
-`src/training/train.py`, lines 73 to 133:
+`src/training/train.py`, lines 73 to 139:
 
 ```python
 @hydra.main(config_path="../../conf", config_name="config", version_base="1.3")
@@ -1131,7 +1176,13 @@ def main(cfg: DictConfig):
            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
     reporter.params("Run", run)
     print(f"[run] {json.dumps(run)}", flush=True)
-    trainer.fit(module, train_dl, val_dl)
+    resume = cfg.train.get("resume_from")
+    if resume:
+        if str(resume).startswith(("http://", "https://", "s3://", "gs://")):
+            from clearml import StorageManager
+            resume = StorageManager.get_local_copy(str(resume))          # the ClearML files server, with this machine's credentials
+        print(f"[resume] continuing from {resume}", flush=True)
+    trainer.fit(module, train_dl, val_dl, ckpt_path=str(resume) if resume else None)
     module.load_state_dict(torch.load(ckpt.best_model_path, map_location="cpu", weights_only=False)["state_dict"])
     reporter.single("best_val_iou", module.best_iou)
 
@@ -1188,7 +1239,7 @@ def iou_f1(counts):
     return tp / (tp + fp + fn + 1e-8), 2 * tp / (2 * tp + fp + fn + 1e-8)
 ```
 
-`src/training/module.py`, lines 50 to 58:
+`src/training/module.py`, lines 58 to 66:
 
 ```python
     def loss(self, logits, y):
@@ -1202,15 +1253,16 @@ def iou_f1(counts):
         return c.bce_weight * bce + c.dice_weight * self.dice(logits, y)
 ```
 
-`src/training/module.py`, lines 79 to 94:
+`src/training/module.py`, lines 87 to 103:
 
 ```python
     def on_validation_epoch_end(self):
         iou, f1 = iou_f1(self._counts)          # one value per class
-        metrics = {"val/iou": iou.mean(), "val/f1": f1.mean()}
+        precision, recall = precision_recall(self._counts)
+        metrics = {"val/iou": iou.mean(), "val/f1": f1.mean(), "val/precision": precision.mean(), "val/recall": recall.mean()}
         if len(self.names) > 1:
-            metrics |= {f"val/iou_{n}": v for n, v in zip(self.names, iou)}
-            metrics |= {f"val/f1_{n}": v for n, v in zip(self.names, f1)}
+            for key, per_class in (("iou", iou), ("f1", f1), ("precision", precision), ("recall", recall)):
+                metrics |= {f"val/{key}_{n}": v for n, v in zip(self.names, per_class)}
         self.log_dict(metrics)
         if self.trainer.sanity_checking:
             return
@@ -1235,12 +1287,12 @@ def iou_f1(counts):
 
 ## 6.8 Choosing the threshold: the sweep (`src/training/sweep.py`)
 
-`src/training/sweep.py`, lines 26 to 51:
+`src/training/sweep.py`, lines 26 to 53:
 
 ```python
 @torch.no_grad()
 def run_sweep(module, loader, cfg, device) -> tuple[pd.DataFrame, dict]:
-    """One row per (tta, threshold): mean `iou`/`f1` over classes plus `iou_<class>`/`f1_<class>`.
+    """One row per (tta, threshold): mean `iou`/`f1`/`precision`/`recall` over classes plus the same per class (`iou_<class>` ...).
     best = the row with the best mean; best["class_thresholds"] = the best threshold per class at that tta."""
     s, names = cfg.sweep, module.names
     thr = torch.as_tensor(np.arange(s.thresholds.start, s.thresholds.stop + 1e-9, s.thresholds.step),
@@ -1254,10 +1306,12 @@ def run_sweep(module, loader, cfg, device) -> tuple[pd.DataFrame, dict]:
             probs = torch.stack([_inv(module(_fwd(x, k, f)).sigmoid(), k, f) for k, f in TTA_SETS[tta]]).mean(0)
             counts += confusion((probs[None] > thr.view(-1, 1, 1, 1, 1)).float(), y, (1, 3, 4))   # (T, C, 3)
         iou, f1 = iou_f1(counts)
+        precision, recall = precision_recall(counts)
+        scores = {"iou": iou, "f1": f1, "precision": precision, "recall": recall}                 # each (T, C)
         for k, t in enumerate(thr.tolist()):
-            row = {"tta": tta, "threshold": round(t, 4), "iou": iou[k].mean().item(), "f1": f1[k].mean().item()}
+            row = {"tta": tta, "threshold": round(t, 4), **{m: v[k].mean().item() for m, v in scores.items()}}
             for c, n in enumerate(names):
-                row[f"iou_{n}"], row[f"f1_{n}"] = iou[k, c].item(), f1[k, c].item()
+                row |= {f"{m}_{n}": v[k, c].item() for m, v in scores.items()}
             rows.append(row)
     df = pd.DataFrame(rows)
     best = df.loc[df[s.metric].idxmax()].to_dict()
@@ -1297,7 +1351,7 @@ def knn_interleaving(fa: np.ndarray, fb: np.ndarray, k: int) -> dict:
             "shift_score_cand": shift(split == 1), "k": int(k)}
 ```
 
-`src/gates/preflight.py`, lines 115 to 123:
+`src/gates/preflight.py`, lines 137 to 145:
 
 ```python
 def gate_preflight(cfg, task, reporter, root: Path, out_dir: Path) -> dict:
@@ -1451,9 +1505,9 @@ def plan(c, classes: list[str] | None = None) -> list[dict]:
                 "parameter_override": overrides(c.params, extra or {})}
 
     trains = [step(f"train_{n}", "train", ["domain_check", "serve_gate_pre"],
-                   {**c.train_params, "data": n, "architecture": c.classes[n].architecture,
+                   {**c.train_params, "data": c.classes[n].get("data", n), "architecture": c.classes[n].architecture,
                     "encoder": c.classes[n].encoder, "loss": c.classes[n].get("loss")}) for n in names]
-    return [step("domain_check", "domain_check", extra={"data": "loveda"}),
+    return [step("domain_check", "domain_check", extra={"data": c.get("check_data", "loveda")}),
             step("serve_gate_pre", "serve_gate", extra={**c.serve_params, "serve.source": "random", "serve.spec": spec}),
             *trains,
             step("serve_gate_post", "serve_gate", [t["name"] for t in trains], {**c.serve_params, "serve.source": "tasks"})]
@@ -1795,7 +1849,7 @@ on the `kaggle` queue with GPU 0. The last line keeps running; the agent stops w
 
 ## 6.19 Which settings ClearML may change (`conf/config.yaml`)
 
-`conf/config.yaml`, lines 72 to 95:
+`conf/config.yaml`, lines 74 to 98:
 
 ```yaml
   tunable:
@@ -1809,6 +1863,7 @@ on the `kaggle` queue with GPU 0. The last line keeps running; the agent stops w
     - loss.bce_weight
     - train.batch_size
     - train.epochs
+    - train.resume_from
     - augment.hflip
     - augment.vflip
     - augment.rot90

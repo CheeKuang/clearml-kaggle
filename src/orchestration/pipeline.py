@@ -77,6 +77,11 @@ def main():
     ap.add_argument("--steps-local", action="store_true", help="with --local: also run the steps in this process")
     ap.add_argument("--queue", help="send every step to this queue instead of the ones in the config")
     ap.add_argument("--classes", help="comma separated subset of the classes in the config")
+    ap.add_argument("--prod-dir", help="folder of production images: before anything is created, check on THIS machine how different they "
+                                       "look from the training data (src/gates/production_shift.py). Nothing is uploaded")
+    ap.add_argument("--prod-root", default="data/oem_416", help="the prepared training data on this machine, used for that check")
+    ap.add_argument("--prod-max-shift", type=float, default=0.5, help="a production score above this is flagged (and stops the launch with --prod-stop)")
+    ap.add_argument("--prod-stop", action="store_true", help="exit with code 2 instead of launching when the production score is above --prod-max-shift")
     for flag, where in (("param", "every step"), ("train-param", "the train steps"), ("serve-param", "the serve gates")):
         ap.add_argument(f"--{flag}", action="append", default=[], metavar="KEY=VALUE", help=f"override on {where}")
     a = ap.parse_args()
@@ -88,6 +93,14 @@ def main():
     for key, given in (("params", a.param), ("train_params", a.train_param), ("serve_params", a.serve_param)):
         cfg[key] = OmegaConf.merge(cfg[key], dict(kv.split("=", 1) for kv in given))
     chosen = a.classes.split(",") if a.classes else None
+
+    if a.prod_dir:                                  # a local check of the controller's own machine: production images never leave it
+        from ..gates.production_shift import run_check
+
+        shift = run_check(a.prod_dir, root=a.prod_root, warn_above=a.prod_max_shift)["max_production_shift"]
+        if a.prod_stop and shift > a.prod_max_shift:
+            print(f"PRODUCTION SHIFT {shift:.2f} > {a.prod_max_shift}: not launching (leave out --prod-stop to launch anyway)")
+            raise SystemExit(2)                     # exit code 2 = a gate was violated, as in src/common/clearml_utils.fail_gate
 
     if a.dry_run:
         for s in plan(cfg, chosen):
